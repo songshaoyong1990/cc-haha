@@ -1,9 +1,10 @@
 import { OPENAI_CODEX_API_ENDPOINT } from '../../services/openaiAuth/client.js'
 import {
+  OPENAI_CODEX_MODEL_CATALOG,
   OPENAI_DEFAULT_HAIKU_MODEL,
   OPENAI_DEFAULT_MAIN_MODEL,
   OPENAI_DEFAULT_SONNET_MODEL,
-  getOpenAIContextWindowForModel,
+  getOpenAICodexContextWindowForModel,
 } from '../../services/openaiAuth/models.js'
 import { MODEL_CONTEXT_WINDOWS_ENV_KEY } from '../../utils/model/modelContextWindows.js'
 import { getHahaOpenAIOAuthFilePath } from './hahaOpenAIOAuthService.js'
@@ -28,8 +29,10 @@ const openAIModels: SavedProvider['models'] = {
 }
 
 const modelContextWindows = Object.fromEntries(
-  Object.values(openAIModels)
-    .map((model) => [model, getOpenAIContextWindowForModel(model)] as const)
+  OPENAI_CODEX_MODEL_CATALOG.map(
+    ({ value }) =>
+      [value, getOpenAICodexContextWindowForModel(value)] as const,
+  )
     .filter((entry): entry is readonly [string, number] => entry[1] !== null),
 )
 
