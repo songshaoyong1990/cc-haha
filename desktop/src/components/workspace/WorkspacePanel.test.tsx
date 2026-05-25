@@ -1250,7 +1250,7 @@ describe('WorkspacePanel', () => {
     ])
   })
 
-  it('queues an inline workspace citation from the file tree menu', async () => {
+  it('does not show duplicate inline citation actions in the file tree menu', async () => {
     useChatStore.setState({
       sessions: {
         'session-cite-file': {
@@ -1314,21 +1314,10 @@ describe('WorkspacePanel', () => {
       })
     })
 
-    await clickElement(view.getByRole('menuitem', { name: 'Cite in message' }))
-
-    expect(useChatStore.getState().sessions['session-cite-file']?.composerInsertion).toMatchObject({
-      text: '@"src/App.tsx"',
-      reference: {
-        kind: 'file',
-        path: 'src/App.tsx',
-        absolutePath: '/repo/src/App.tsx',
-        name: 'App.tsx',
-        isDirectory: false,
-      },
-    })
+    expect(view.queryByRole('menuitem', { name: 'Cite in message' })).toBeNull()
   })
 
-  it('copies file paths from the file tree menu with the legacy clipboard fallback', async () => {
+  it('copies relative and absolute file paths from the file tree menu with the legacy clipboard fallback', async () => {
     const originalClipboard = navigator.clipboard
     const originalExecCommand = document.execCommand
     Object.defineProperty(document, 'execCommand', {
@@ -1391,11 +1380,22 @@ describe('WorkspacePanel', () => {
       await waitFor(() => {
         expect(execCommand).toHaveBeenCalledWith('copy')
       })
-      expect(writeText).toHaveBeenCalledWith('/repo/src/App.tsx')
+      expect(writeText).toHaveBeenCalledWith('src/App.tsx')
       expect(useUIStore.getState().toasts[useUIStore.getState().toasts.length - 1]).toMatchObject({
         type: 'success',
         message: 'Path copied.',
       })
+
+      await act(() => {
+        fireEvent.contextMenu(view.getByRole('button', { name: /App\.tsx/i }), {
+          clientX: 260,
+          clientY: 80,
+        })
+      })
+
+      await clickElement(view.getByRole('menuitem', { name: 'Copy absolute path' }))
+
+      expect(writeText).toHaveBeenLastCalledWith('/repo/src/App.tsx')
     } finally {
       Object.defineProperty(document, 'execCommand', {
         configurable: true,

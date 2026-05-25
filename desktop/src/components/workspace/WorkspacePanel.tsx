@@ -155,10 +155,6 @@ function getWorkspaceReferenceName(path: string, isDirectory = false) {
   return isDirectory && !name.endsWith('/') ? `${name}/` : name
 }
 
-function formatInlineWorkspaceReference(path: string) {
-  return `@${JSON.stringify(path)}`
-}
-
 function isMarkdownPreview(tab: WorkspacePreviewTab) {
   if (tab.kind !== 'file') return false
   const language = (tab.language ?? '').toLowerCase()
@@ -941,7 +937,6 @@ export function WorkspacePanel({ sessionId }: WorkspacePanelProps) {
   const closePreviewTabs = useWorkspacePanelStore((state) => state.closePreviewTabs)
   const closePanel = useWorkspacePanelStore((state) => state.closePanel)
   const addWorkspaceReference = useWorkspaceChatContextStore((state) => state.addReference)
-  const queueComposerInsertion = useChatStore((state) => state.queueComposerInsertion)
   const chatState = useChatStore((state) => state.sessions[sessionId]?.chatState ?? 'idle')
   const refreshLifecycleRef = useRef({
     sessionId,
@@ -1043,19 +1038,6 @@ export function WorkspacePanel({ sessionId }: WorkspacePanelProps) {
     })
   }
 
-  const citeWorkspacePathInMessage = (path: string, isDirectory = false) => {
-    queueComposerInsertion(sessionId, {
-      text: formatInlineWorkspaceReference(path),
-      reference: {
-        kind: 'file',
-        path,
-        absolutePath: resolveWorkspaceAttachmentPath(status?.workDir, path),
-        name: getWorkspaceReferenceName(path, isDirectory),
-        isDirectory,
-      },
-    })
-  }
-
   const addLineCommentToChat = (path: string, line: number, note: string, quote: string) => {
     addWorkspaceReference(sessionId, {
       kind: 'code-comment',
@@ -1106,9 +1088,9 @@ export function WorkspacePanel({ sessionId }: WorkspacePanelProps) {
     setPreviewTabContextMenu(null)
   }
 
-  const copyWorkspacePath = async (path: string) => {
-    const resolvedPath = resolveWorkspaceAttachmentPath(status?.workDir, path)
-    const copied = await copyTextToClipboard(resolvedPath)
+  const copyWorkspacePath = async (path: string, mode: 'relative' | 'absolute' = 'relative') => {
+    const pathToCopy = mode === 'absolute' ? resolveWorkspaceAttachmentPath(status?.workDir, path) : path
+    const copied = await copyTextToClipboard(pathToCopy)
     setFileContextMenu(null)
     addToast({
       type: copied ? 'success' : 'error',
@@ -1504,23 +1486,20 @@ export function WorkspacePanel({ sessionId }: WorkspacePanelProps) {
           <button
             type="button"
             role="menuitem"
-            onClick={() => {
-              citeWorkspacePathInMessage(fileContextMenu.path, fileContextMenu.isDirectory)
-              setFileContextMenu(null)
-            }}
-            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)]"
-          >
-            <span aria-hidden="true" className="material-symbols-outlined text-[14px] text-[var(--color-text-tertiary)]">chat_bubble</span>
-            <span>{t('workspace.citeInMessage')}</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
             onClick={() => void copyWorkspacePath(fileContextMenu.path)}
             className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)]"
           >
             <span aria-hidden="true" className="material-symbols-outlined text-[14px] text-[var(--color-text-tertiary)]">content_copy</span>
             <span>{t('workspace.copyPath')}</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => void copyWorkspacePath(fileContextMenu.path, 'absolute')}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)]"
+          >
+            <span aria-hidden="true" className="material-symbols-outlined text-[14px] text-[var(--color-text-tertiary)]">file_copy</span>
+            <span>{t('workspace.copyAbsolutePath')}</span>
           </button>
         </div>
       )}
