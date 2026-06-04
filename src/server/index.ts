@@ -125,9 +125,14 @@ function originFromUrl(value: string | null): string | null {
 
 export function startServer(port = PORT, host = HOST) {
   enableConfigs()
-  diagnosticsService.installConsoleCapture()
-  diagnosticsService.installProcessCapture()
-  ProviderService.setServerPort(port)
+  // Don't hijack the global console / process handlers under `bun test`:
+  // a test that boots the server would otherwise route every test-side
+  // console.error/warn into the user's real diagnostics file.
+  if (process.env.NODE_ENV !== 'test') {
+    diagnosticsService.installConsoleCapture()
+    diagnosticsService.installProcessCapture()
+  }
+  let serverPort = port
   const localConnectHost =
     host === '0.0.0.0' || host === '127.0.0.1' || host === 'localhost'
       ? '127.0.0.1'
@@ -225,7 +230,7 @@ export function startServer(port = PORT, host = HOST) {
               connectedAt: Date.now(),
               channel: 'client',
               sdkToken: null,
-              serverPort: port,
+              serverPort,
               serverHost: localConnectHost,
             },
           })
@@ -260,7 +265,7 @@ export function startServer(port = PORT, host = HOST) {
               connectedAt: Date.now(),
               channel: 'sdk',
               sdkToken: url.searchParams.get('token'),
-              serverPort: port,
+              serverPort,
               serverHost: localConnectHost,
             },
           })
@@ -428,6 +433,8 @@ export function startServer(port = PORT, host = HOST) {
 
       websocket: handleWebSocket,
     })
+    serverPort = server.port
+    ProviderService.setServerPort(serverPort)
   } catch (error) {
     const message = error instanceof Error && error.message
       ? error.message
@@ -448,7 +455,7 @@ export function startServer(port = PORT, host = HOST) {
     )
   })
 
-  console.log(`[Server] Claude Code API server running at http://${host}:${port}`)
+  console.log(`[Server] Claude Code API server running at http://${host}:${serverPort}`)
   return server
 }
 

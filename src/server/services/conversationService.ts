@@ -45,6 +45,22 @@ const CONTROL_READY_POLL_MS = 50
 const AUTO_MEMORY_DIRNAME = 'memory'
 export const DESKTOP_CLI_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 6_000
 
+/**
+ * Severity for a CLI subprocess exit, by exit code.
+ *
+ * Reaching handleProcessExit already means the process left outside the clean
+ * stop path, but the exit code still tells crash from teardown:
+ *  - 0            clean exit
+ *  - null         terminated by a signal with no numeric code
+ *  - 143 (SIGTERM), 137 (SIGKILL): killed — shutdown / user stop / OS reclaim
+ * None of these are a crash the user needs flagged in red. Any other non-zero
+ * code is a genuine "it died mid-chat" failure and stays an error.
+ */
+export function cliExitSeverity(code: number | null): 'info' | 'error' {
+  if (code === 0 || code === null || code === 143 || code === 137) return 'info'
+  return 'error'
+}
+
 type AttachmentRef = {
   type: 'file' | 'image'
   name?: string
@@ -77,6 +93,8 @@ type SessionProcess = {
   outputDrain: Promise<void>
   sdkMessages: any[]
   initMessage: any | null
+  usesOfficialOAuth: boolean
+  officialOAuthToken: string | null
   pendingPermissionRequests: Map<
     string,
     {
@@ -261,6 +279,7 @@ export class ConversationService {
     // chdir 后落到正确目录。
     //
     const childEnv = await this.buildChildEnv(launchWorkDir, sdkUrl, options)
+    const usesOfficialOAuth = this.shouldMarkManagedOAuth(options?.providerId)
 
     let proc: ReturnType<typeof Bun.spawn>
     try {
@@ -308,6 +327,8 @@ export class ConversationService {
       outputDrain: Promise.resolve(),
       sdkMessages: [],
       initMessage: null,
+      usesOfficialOAuth,
+      officialOAuthToken: childEnv.CLAUDE_CODE_OAUTH_TOKEN ?? null,
       pendingPermissionRequests: new Map(),
     }
     this.sessions.set(sessionId, session)
@@ -412,6 +433,10 @@ export class ConversationService {
     content: string,
     attachments?: AttachmentRef[],
   ): Promise<boolean> {
+    const session = this.sessions.get(sessionId)
+    if (session) {
+      await this.refreshOfficialOAuthTokenBeforeTurn(sessionId, session)
+    }
     const userContent = await this.buildUserContent(content, sessionId, attachments)
     return this.sendSdkMessage(sessionId, {
       type: 'user',
@@ -924,7 +949,7 @@ export class ConversationService {
       const exitError = this.buildRuntimeExitMessage(sessionId, code)
       void diagnosticsService.recordEvent({
         type: 'cli_runtime_exit',
-        severity: 'error',
+        severity: cliExitSeverity(code),
         sessionId,
         summary: exitError,
         details: {
@@ -1137,6 +1162,33 @@ export class ConversationService {
       )
     }
     return env
+  }
+
+  private async refreshOfficialOAuthTokenBeforeTurn(
+    sessionId: string,
+    session: SessionProcess,
+  ): Promise<void> {
+    if (!session.usesOfficialOAuth) return
+
+    let token: string | null = null
+    try {
+      const { hahaOAuthService } = await import('./hahaOAuthService.js')
+      token = await hahaOAuthService.ensureFreshAccessToken()
+    } catch (err) {
+      console.error(
+        '[conversationService] refresh official OAuth token before turn failed:',
+        err instanceof Error ? err.message : err,
+      )
+      return
+    }
+
+    if (!token || token === session.officialOAuthToken) return
+
+    session.officialOAuthToken = token
+    this.sendSdkMessage(sessionId, {
+      type: 'update_environment_variables',
+      variables: { CLAUDE_CODE_OAUTH_TOKEN: token },
+    })
   }
 
   private shouldStripInheritedProviderEnv(providerId?: string | null): boolean {

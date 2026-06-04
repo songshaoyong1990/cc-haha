@@ -19,7 +19,14 @@ import { SettingsService } from '../services/settingsService.js'
 import { ProviderService } from '../services/providerService.js'
 import { isOpenAIOfficialProviderId } from '../services/openaiOfficialProvider.js'
 import { diagnosticsService } from '../services/diagnosticsService.js'
-import { deriveTitle, generateTitle, saveAiTitle } from '../services/titleService.js'
+import {
+  buildConversationTitleInput,
+  deriveTitle,
+  generateTitle,
+  resolveTitleLanguagePreference,
+  saveAiTitle,
+  type TitleConversationTurn,
+} from '../services/titleService.js'
 import { parseSlashCommand } from '../../utils/slashCommandParsing.js'
 import {
   COMMAND_NAME_TAG,
@@ -63,8 +70,10 @@ const sessionTitleState = new Map<string, {
   userMessageCount: number
   hasCustomTitle: boolean
   firstUserMessage: string
-  allUserMessages: string[]
-  startedGenerationCounts: Set<number>
+  completedTurns: TitleConversationTurn[]
+  activeTurn?: TitleConversationTurn & { count: number }
+  startedGenerationKeys: Set<string>
+  generationSeq: number
 }>()
 
 const runtimeOverrides = new Map<string, {
@@ -150,7 +159,7 @@ export const handleWebSocket = {
     }
 
     addActiveClient(sessionId, ws)
-    if (prewarmedSessions.has(sessionId)) {
+    if (prewarmPendingSessions.has(sessionId) || prewarmedSessions.has(sessionId)) {
       bindPrewarmMetadataCapture(sessionId)
     } else {
       bindClientSessionOutput(sessionId, ws)
@@ -310,19 +319,26 @@ async function handleUserMessage(
       userMessageCount: 0,
       hasCustomTitle: !!(await sessionService.getCustomTitle(sessionId)),
       firstUserMessage: '',
-      allUserMessages: [],
-      startedGenerationCounts: new Set<number>(),
+      completedTurns: [],
+      startedGenerationKeys: new Set<string>(),
+      generationSeq: 0,
     }
     sessionTitleState.set(sessionId, titleState)
   }
   const titleInput = getTitleInputForUserMessage(message.content, desktopSlashCommand)
+  let titleTurnNumber: number | null = null
   if (titleInput) {
     titleState.userMessageCount++
-    titleState.allUserMessages.push(titleInput)
+    titleTurnNumber = titleState.userMessageCount
+    titleState.activeTurn = {
+      count: titleTurnNumber,
+      userText: titleInput,
+      assistantText: '',
+    }
     if (titleState.userMessageCount === 1) {
       titleState.firstUserMessage = titleInput
     }
-    triggerTitleGeneration(ws, sessionId)
+    triggerTitleGeneration(ws, sessionId, 'user-message')
   }
 
   // 启动 CLI 子进程（如果还没有）
@@ -359,6 +375,9 @@ async function handleUserMessage(
   let userMessageSent = false
   const shouldForwardCurrentTurnLocalCommand =
     createCurrentTurnLocalCommandForwarder(desktopSlashCommand)
+  const removeTitleOutputCallback = titleTurnNumber === null
+    ? null
+    : bindTitleSessionOutput(ws, sessionId, () => userMessageSent)
 
   bindAllClientSessionOutputs(sessionId, {
     shouldForward: (cliMsg) => {
@@ -375,6 +394,8 @@ async function handleUserMessage(
     message.attachments
   )
   if (!sent) {
+    removeTitleOutputCallback?.()
+    discardActiveTitleTurn(sessionId, titleTurnNumber)
     sendMessage(ws, {
       type: 'error',
       message: 'CLI process is not running. The session may have ended or the process crashed.',
@@ -508,6 +529,27 @@ async function handleSetPermissionMode(
   await applyPermissionModeToActiveSession(ws, sessionId, message.mode)
 }
 
+/**
+ * 决定一次权限模式切换是否需要重启 CLI 子进程。
+ *
+ * 只有"进入 bypassPermissions"才需要重启：CLI 必须带 --dangerously-skip-permissions
+ * 启动，否则运行时的 set_permission_mode → bypassPermissions 会被拒绝，所以重启子进程
+ * 带上该 flag。
+ *
+ * 反过来"从 bypassPermissions 切到更严格的模式"**不要**重启：此时进程已带 flag，运行时
+ * 降级即可。更关键的是——重启会把进程内的 prePlanMode 记忆冲掉：若 bypass→plan 走重启，
+ * 新 CLI 直接以 plan 启动、prePlanMode 为空，ExitPlanMode 只能恢复成 default 而非进入前的
+ * bypassPermissions。保持进程不变、走 setPermissionMode 做进程内 transition，CLI 才会像 TUI
+ * 一样栈存 prePlanMode='bypassPermissions'，退出 plan 时正确恢复 bypass。
+ */
+export function shouldRestartForPermissionMode(
+  currentMode: string,
+  mode: string,
+): boolean {
+  if (currentMode === mode) return false
+  return mode === 'bypassPermissions'
+}
+
 async function applyPermissionModeToActiveSession(
   ws: ServerWebSocket<WebSocketData>,
   sessionId: string,
@@ -516,13 +558,7 @@ async function applyPermissionModeToActiveSession(
   const currentMode = conversationService.getSessionPermissionMode(sessionId)
   if (currentMode === mode) return
 
-  // Switching to/from bypassPermissions requires the CLI to be (re)started with
-  // --dangerously-skip-permissions. The CLI rejects a runtime set_permission_mode
-  // to bypassPermissions if it wasn't launched with that flag.  Rather than just
-  // sending the SDK message (which would silently fail), restart the CLI subprocess
-  // with the correct arguments so the new permission mode takes effect.
-  const needsRestart =
-    mode === 'bypassPermissions' || currentMode === 'bypassPermissions'
+  const needsRestart = shouldRestartForPermissionMode(currentMode, mode)
 
   if (needsRestart) {
     void enqueueRuntimeTransition(sessionId, () =>
@@ -763,27 +799,30 @@ function handleStopGeneration(ws: ServerWebSocket<WebSocketData>) {
 // Title generation
 // ============================================================================
 
-function triggerTitleGeneration(ws: ServerWebSocket<WebSocketData>, sessionId: string): void {
+type TitleGenerationPhase = 'user-message' | 'turn-complete'
+
+function triggerTitleGeneration(
+  ws: ServerWebSocket<WebSocketData>,
+  sessionId: string,
+  phase: TitleGenerationPhase,
+  completedTurnCount?: number,
+): void {
   const state = sessionTitleState.get(sessionId)
   if (!state || state.hasCustomTitle) return
 
-  const count = state.userMessageCount
+  const count = phase === 'turn-complete'
+    ? completedTurnCount ?? state.userMessageCount
+    : state.userMessageCount
 
-  // Generate on count 1 (first response) and count 3 (with more context)
-  if (count !== 1 && count !== 3) return
-  if (state.startedGenerationCounts.has(count)) return
-  state.startedGenerationCounts.add(count)
+  if (phase === 'user-message') {
+    if (count !== 1) return
+    const key = 'placeholder:1'
+    if (state.startedGenerationKeys.has(key)) return
+    state.startedGenerationKeys.add(key)
 
-  const text = count === 1
-    ? state.firstUserMessage
-    : state.allUserMessages.join('\n')
-  const runtimeProviderId = runtimeOverrides.get(sessionId)?.providerId
-
-  // Fire-and-forget: derive quick title, then upgrade with AI
-  void (async () => {
-    try {
-      // Stage 1: quick placeholder (only on first message)
-      if (count === 1) {
+    void (async () => {
+      try {
+        const text = state.firstUserMessage
         const placeholder = deriveTitle(text)
         if (placeholder) {
           const saved = await saveAiTitle(sessionId, placeholder)
@@ -791,24 +830,178 @@ function triggerTitleGeneration(ws: ServerWebSocket<WebSocketData>, sessionId: s
             state.hasCustomTitle = true
             return
           }
-          sendMessage(ws, { type: 'session_title_updated', sessionId, title: placeholder })
+          sendSessionTitleUpdated(ws, sessionId, placeholder)
         }
+      } catch (err) {
+        console.error(`[Title] Failed to derive title for ${sessionId}:`, err)
       }
+    })()
+    return
+  }
 
-      // Stage 2: AI-generated title
-      const aiTitle = await generateTitle(text, runtimeProviderId)
+  // Generate polished titles after assistant output completes on turn 1 and 3.
+  if (count !== 1 && count !== 3) return
+  const key = `complete:${count}`
+  if (state.startedGenerationKeys.has(key)) return
+  state.startedGenerationKeys.add(key)
+
+  const text = buildConversationTitleInput(state.completedTurns)
+  const runtimeProviderId = runtimeOverrides.get(sessionId)?.providerId
+  const generationSeq = ++state.generationSeq
+
+  void (async () => {
+    try {
+      const responseLanguage = await getResponseLanguageSetting()
+      const titleLanguagePreference = resolveTitleLanguagePreference(
+        state.firstUserMessage,
+        responseLanguage,
+      )
+      const aiTitle = await generateTitle(
+        text,
+        runtimeProviderId,
+        titleLanguagePreference,
+      )
+      if (generationSeq !== state.generationSeq) return
       if (aiTitle) {
         const saved = await saveAiTitle(sessionId, aiTitle)
         if (!saved) {
           state.hasCustomTitle = true
           return
         }
-        sendMessage(ws, { type: 'session_title_updated', sessionId, title: aiTitle })
+        sendSessionTitleUpdated(ws, sessionId, aiTitle)
       }
     } catch (err) {
       console.error(`[Title] Failed to generate title for ${sessionId}:`, err)
     }
   })()
+}
+
+async function getResponseLanguageSetting(): Promise<string | undefined> {
+  const userSettings = await settingsService.getUserSettings().catch(() => ({}))
+  return typeof userSettings.language === 'string'
+    ? userSettings.language
+    : undefined
+}
+
+function sendSessionTitleUpdated(
+  fallbackWs: ServerWebSocket<WebSocketData>,
+  sessionId: string,
+  title: string,
+): void {
+  const payload: ServerMessage = { type: 'session_title_updated', sessionId, title }
+  const clients = activeSessions.get(sessionId)
+  if (!clients?.size) {
+    sendMessage(fallbackWs, payload)
+    return
+  }
+  for (const client of clients) {
+    sendMessage(client, payload)
+  }
+}
+
+function bindTitleSessionOutput(
+  ws: ServerWebSocket<WebSocketData>,
+  sessionId: string,
+  shouldProcess: () => boolean,
+): () => void {
+  const callback = (cliMsg: any) => {
+    if (!shouldProcess() && !(cliMsg?.type === 'result' && cliMsg?.is_error)) {
+      return
+    }
+
+    appendAssistantTextForTitle(sessionId, cliMsg)
+
+    if (cliMsg?.type === 'result') {
+      conversationService.removeOutputCallback(sessionId, callback)
+      const completedTurnCount = completeActiveTitleTurn(sessionId)
+      if (!cliMsg.is_error) {
+        triggerTitleGeneration(ws, sessionId, 'turn-complete', completedTurnCount ?? undefined)
+      }
+    }
+  }
+
+  conversationService.onOutput(sessionId, callback)
+  return () => conversationService.removeOutputCallback(sessionId, callback)
+}
+
+function appendAssistantTextForTitle(sessionId: string, cliMsg: any): void {
+  const activeTurn = sessionTitleState.get(sessionId)?.activeTurn
+  if (!activeTurn) return
+
+  const streamText = extractAssistantStreamTextForTitle(cliMsg)
+  if (streamText) {
+    activeTurn.assistantText = `${activeTurn.assistantText ?? ''}${streamText}`
+    return
+  }
+
+  const assistantText = extractAssistantMessageTextForTitle(cliMsg)
+  if (assistantText) {
+    activeTurn.assistantText = activeTurn.assistantText
+      ? `${activeTurn.assistantText}\n${assistantText}`
+      : assistantText
+    return
+  }
+
+  if (
+    cliMsg?.type === 'result' &&
+    !cliMsg.is_error &&
+    !activeTurn.assistantText &&
+    typeof cliMsg.result === 'string'
+  ) {
+    activeTurn.assistantText = cliMsg.result
+  }
+}
+
+function extractAssistantStreamTextForTitle(cliMsg: any): string | null {
+  const event = cliMsg?.event
+  if (
+    cliMsg?.type !== 'stream_event' ||
+    event?.type !== 'content_block_delta' ||
+    event.delta?.type !== 'text_delta' ||
+    typeof event.delta.text !== 'string'
+  ) {
+    return null
+  }
+  return event.delta.text
+}
+
+function extractAssistantMessageTextForTitle(cliMsg: any): string | null {
+  if (cliMsg?.type !== 'assistant') return null
+  const content = cliMsg.message?.content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return null
+  const text = content
+    .flatMap((block) => {
+      if (!block || typeof block !== 'object') return []
+      const typedBlock = block as { type?: unknown; text?: unknown }
+      return typedBlock.type === 'text' && typeof typedBlock.text === 'string'
+        ? [typedBlock.text]
+        : []
+    })
+    .join('\n')
+    .trim()
+  return text || null
+}
+
+function completeActiveTitleTurn(sessionId: string): number | null {
+  const state = sessionTitleState.get(sessionId)
+  const activeTurn = state?.activeTurn
+  if (!state || !activeTurn) return null
+
+  state.completedTurns.push({
+    userText: activeTurn.userText,
+    assistantText: activeTurn.assistantText?.trim(),
+  })
+  state.activeTurn = undefined
+  return activeTurn.count
+}
+
+function discardActiveTitleTurn(sessionId: string, count: number | null): void {
+  if (count === null) return
+  const state = sessionTitleState.get(sessionId)
+  if (state?.activeTurn?.count === count) {
+    state.activeTurn = undefined
+  }
 }
 
 // ============================================================================
@@ -1278,8 +1471,10 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
               }
 
               // JSON parse failed — defer to the assistant message which
-              // carries the complete, already-parsed tool input.
-              console.warn(
+              // carries the complete, already-parsed tool input. This is the
+              // normal streaming partial-input case, not a fault: keep it at
+              // debug so it doesn't surface as a diagnostics warning.
+              console.debug(
                 `[WS] Tool input JSON parse failed for ${toolBlock.toolName} (${toolBlock.toolUseId}), deferring to assistant message`,
               )
               streamState.pendingToolBlocks.set(toolBlock.toolUseId, {
@@ -1416,6 +1611,14 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
             state: 'compacting',
             verb: 'Compacting conversation',
           }]
+        }
+        // CLI 在权限模式变化时也会 enqueue 一条 status 事件（status:null +
+        // permissionMode），用于把恢复后的真实权限（如 ExitPlanMode 退出 plan、
+        // Shift+Tab）广播给前端。它带 status:null 但**不是** thinking 信号，
+        // 必须在下面的 null→thinking 兜底之前拦截，否则字段会被丢弃，桌面端
+        // 选择器就会一直卡在"计划模式"。
+        if (typeof cliMsg.permissionMode === 'string') {
+          return [{ type: 'permission_mode_changed', mode: cliMsg.permissionMode }]
         }
         if (cliMsg.status == null) {
           return [{ type: 'status', state: 'thinking', verb: 'Thinking' }]
@@ -1889,9 +2092,6 @@ function bindClientSessionOutput(
       sendMessage(ws, msg)
     }
 
-    if (cliMsg.type === 'result') {
-      triggerTitleGeneration(ws, sessionId)
-    }
   }
 
   clientOutputCallbacks.set(ws, { sessionId, callback })
@@ -2235,5 +2435,11 @@ export function __resetWebSocketHandlerStateForTests(): void {
   activeSessions.clear()
   clientOutputCallbacks.clear()
   sessionCleanupTimers.clear()
+  prewarmPendingSessions.clear()
+  prewarmedSessions.clear()
   prewarmIdleTimers.clear()
+}
+
+export function __markPrewarmPendingForTests(sessionId: string): void {
+  prewarmPendingSessions.add(sessionId)
 }

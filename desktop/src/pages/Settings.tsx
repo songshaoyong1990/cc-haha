@@ -35,8 +35,11 @@ import { ClaudeOfficialLogin } from '../components/settings/ClaudeOfficialLogin'
 import { ChatGPTOfficialLogin } from '../components/settings/ChatGPTOfficialLogin'
 import { OPENAI_OFFICIAL_PROVIDER_ID } from '../constants/openaiOfficialProvider'
 import { useUpdateStore } from '../stores/updateStore'
+import { getBaseUrl } from '../api/client'
 import { formatBytes } from '../lib/formatBytes'
-import { isTauriRuntime } from '../lib/desktopRuntime'
+import { isDesktopRuntime } from '../lib/desktopRuntime'
+import { getDesktopHost } from '../lib/desktopHost'
+import { publicAssetPath } from '../lib/publicAsset'
 import {
   getDesktopNotificationPermission,
   notifyDesktop,
@@ -689,6 +692,7 @@ function updateSettingsJsonProviderConnection(
   apiKey: string,
   preset: ProviderPreset,
   baseUrl: string,
+  proxyBaseUrl: string,
 ): string {
   try {
     const parsed = JSON.parse(raw || '{}') as { env?: Record<string, unknown> }
@@ -698,13 +702,17 @@ function updateSettingsJsonProviderConnection(
     const env = { ...existingEnv }
     delete env.ANTHROPIC_API_KEY
     delete env.ANTHROPIC_AUTH_TOKEN
-    env.ANTHROPIC_BASE_URL = apiFormat !== 'anthropic' ? 'http://127.0.0.1:3456/proxy' : baseUrl
+    env.ANTHROPIC_BASE_URL = apiFormat !== 'anthropic' ? proxyBaseUrl : baseUrl
     Object.assign(env, buildSettingsJsonAuthEnv(apiFormat, authStrategy, apiKey, preset))
     parsed.env = env
     return JSON.stringify(parsed, null, 2)
   } catch {
     return raw
   }
+}
+
+function getProviderProxyBaseUrl(): string {
+  return `${getBaseUrl().replace(/\/$/, '')}/proxy`
 }
 
 function buildFallbackPreset(provider?: SavedProvider): ProviderPreset {
@@ -725,13 +733,7 @@ function buildFallbackPreset(provider?: SavedProvider): ProviderPreset {
 }
 
 function openExternalUrl(url: string) {
-  if (!isTauriRuntime()) {
-    window.open(url, '_blank', 'noopener,noreferrer')
-    return
-  }
-
-  void import('@tauri-apps/plugin-shell')
-    .then((mod) => mod.open(url))
+  void getDesktopHost().shell.open(url)
     .catch(() => window.open(url, '_blank', 'noopener,noreferrer'))
 }
 
@@ -780,6 +782,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
   const [settingsJson, setSettingsJson] = useState('')
   const [settingsJsonError, setSettingsJsonError] = useState<string | null>(null)
   const jsonPastedRef = useRef(false)
+  const providerProxyBaseUrl = useMemo(() => getProviderProxyBaseUrl(), [])
 
   // Load current settings.json and merge provider env vars
   useEffect(() => {
@@ -806,7 +809,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
             ...(Object.keys(modelContextWindows).length > 0
               ? { [MODEL_CONTEXT_WINDOWS_ENV_KEY]: JSON.stringify(modelContextWindows) }
               : {}),
-            ANTHROPIC_BASE_URL: needsProxy ? 'http://127.0.0.1:3456/proxy' : baseUrl,
+            ANTHROPIC_BASE_URL: needsProxy ? providerProxyBaseUrl : baseUrl,
             ...buildSettingsJsonAuthEnv(apiFormat, authStrategy, apiKey, selectedPreset),
             ANTHROPIC_MODEL: normalizedModels.main,
             ANTHROPIC_DEFAULT_HAIKU_MODEL: normalizedModels.haiku,
@@ -820,7 +823,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
       })
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedPreset.id])
+  }, [selectedPreset.id, providerProxyBaseUrl])
 
   const handlePresetChange = (preset: ProviderPreset) => {
     setSelectedPreset(preset)
@@ -916,19 +919,19 @@ function ProviderFormModal({ open, onClose, mode, provider, presets }: ProviderF
   }
   const handleBaseUrlChange = (value: string) => {
     setBaseUrl(value)
-    setSettingsJson((current) => updateSettingsJsonProviderConnection(current, apiFormat, authStrategy, apiKey, selectedPreset, value))
+    setSettingsJson((current) => updateSettingsJsonProviderConnection(current, apiFormat, authStrategy, apiKey, selectedPreset, value, providerProxyBaseUrl))
   }
   const handleApiKeyChange = (value: string) => {
     setApiKey(value)
-    setSettingsJson((current) => updateSettingsJsonProviderConnection(current, apiFormat, authStrategy, value, selectedPreset, baseUrl))
+    setSettingsJson((current) => updateSettingsJsonProviderConnection(current, apiFormat, authStrategy, value, selectedPreset, baseUrl, providerProxyBaseUrl))
   }
   const handleApiFormatChange = (value: ApiFormat) => {
     setApiFormat(value)
-    setSettingsJson((current) => updateSettingsJsonProviderConnection(current, value, authStrategy, apiKey, selectedPreset, baseUrl))
+    setSettingsJson((current) => updateSettingsJsonProviderConnection(current, value, authStrategy, apiKey, selectedPreset, baseUrl, providerProxyBaseUrl))
   }
   const handleAuthStrategyChange = (value: ProviderAuthStrategy) => {
     setAuthStrategy(value)
-    setSettingsJson((current) => updateSettingsJsonProviderConnection(current, apiFormat, value, apiKey, selectedPreset, baseUrl))
+    setSettingsJson((current) => updateSettingsJsonProviderConnection(current, apiFormat, value, apiKey, selectedPreset, baseUrl, providerProxyBaseUrl))
   }
   const handleModelChange = (slot: ModelSlot, value: string) => {
     const nextModels = { ...models, [slot]: value }
@@ -1507,7 +1510,7 @@ function GeneralSettings() {
   }, [])
 
   useEffect(() => {
-    if (!isTauriRuntime()) return
+    if (!isDesktopRuntime()) return
     void fetchAppMode()
   }, [fetchAppMode])
 
@@ -1718,9 +1721,13 @@ function GeneralSettings() {
 
   const openPortableDirPicker = async () => {
     setModeError(null)
+    const host = getDesktopHost()
+    if (!host.capabilities.dialogs) {
+      setModeError(t('settings.general.storagePickerError'))
+      return
+    }
     try {
-      const { open } = await import('@tauri-apps/plugin-dialog')
-      const selected = await open({
+      const selected = await host.dialogs.open({
         directory: true,
         multiple: false,
         title: t('settings.general.storageChooseDirTitle'),
@@ -1765,10 +1772,9 @@ function GeneralSettings() {
     setModeError(null)
     try {
       await setAppModeAction(pendingMode, pendingPortableDir)
-      const { invoke } = await import('@tauri-apps/api/core')
-      await invoke('prepare_for_app_mode_restart')
-      const { relaunch } = await import('@tauri-apps/plugin-process')
-      await relaunch()
+      const host = getDesktopHost()
+      await host.appMode.prepareRestart()
+      await host.appMode.restart()
     } catch (error) {
       setModeError(
         error instanceof Error
@@ -2321,7 +2327,7 @@ function GeneralSettings() {
         </div>
       </div>
 
-      {isTauriRuntime() && (
+      {isDesktopRuntime() && (
         <div className="mt-8 border-t border-[var(--color-border)] pt-8">
           <h2 className="text-base font-semibold text-[var(--color-text-primary)] mb-1">{t('settings.general.storageTitle')}</h2>
           <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.storageDescription')}</p>
@@ -3486,8 +3492,7 @@ function AboutSettings() {
   useEffect(() => {
     let cancelled = false
 
-    import('@tauri-apps/api/app')
-      .then((mod) => mod.getVersion())
+    getDesktopHost().app.getVersion()
       .then((value) => {
         if (!cancelled) setVersion(value)
       })
@@ -3510,7 +3515,7 @@ function AboutSettings() {
   }, [updateProxy])
 
   const openUrl = (url: string) => {
-    import('@tauri-apps/plugin-shell').then((mod) => mod.open(url)).catch(() => window.open(url, '_blank'))
+    void getDesktopHost().shell.open(url).catch(() => window.open(url, '_blank'))
   }
 
   const checkedAtText =
@@ -3586,7 +3591,7 @@ function AboutSettings() {
   return (
     <div className="w-full min-w-0 max-w-lg mx-auto flex flex-col items-center py-6">
       {/* Logo + App Name + Version */}
-      <img src="/app-icon.png" alt="Claude Code Haha" className="w-20 h-20 mb-4" />
+      <img src={publicAssetPath('app-icon.png')} alt="Claude Code Haha" className="w-20 h-20 mb-4" />
       <h1 className="text-xl font-bold text-[var(--color-text-primary)]">Claude Code Haha</h1>
       {version && (
         <div className="mt-1 flex items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
@@ -3607,7 +3612,7 @@ function AboutSettings() {
           onClick={() => openUrl(GITHUB_REPO)}
           className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-[var(--color-border)] hover:bg-[var(--color-surface-hover)] transition-colors cursor-pointer"
         >
-          <img src="/icons/github.svg" alt="GitHub" className="w-5 h-5 opacity-70" />
+          <img src={publicAssetPath('icons/github.svg')} alt="GitHub" className="w-5 h-5 opacity-70" />
           <div className="flex-1 text-left">
             <div className="text-sm font-medium text-[var(--color-text-primary)]">NanmiCoder/cc-haha</div>
             <div className="text-xs text-[var(--color-text-tertiary)]">{t('settings.about.starHint')}</div>
@@ -3813,7 +3818,7 @@ function AboutSettings() {
           onClick={() => openUrl(AUTHOR_GITHUB)}
           className="w-full flex items-center gap-3 px-4 py-2.5 rounded-lg hover:bg-[var(--color-surface-hover)] transition-colors cursor-pointer"
         >
-          <img src="/icons/github.svg" alt="GitHub" className="w-4 h-4 opacity-60" />
+          <img src={publicAssetPath('icons/github.svg')} alt="GitHub" className="w-4 h-4 opacity-60" />
           <span className="text-sm text-[var(--color-text-primary)]">程序员阿江-Relakkes</span>
           <span className="text-xs text-[var(--color-text-tertiary)] ml-auto">GitHub</span>
         </button>
@@ -3829,7 +3834,7 @@ function AboutSettings() {
               onClick={() => openUrl(link.url)}
               className="w-full flex items-center gap-3 px-4 py-2.5 rounded-lg hover:bg-[var(--color-surface-hover)] transition-colors cursor-pointer"
             >
-              <img src={link.icon} alt={link.name} className="w-4 h-4 opacity-60" />
+              <img src={publicAssetPath(link.icon)} alt={link.name} className="w-4 h-4 opacity-60" />
               <span className="text-sm text-[var(--color-text-primary)]">{link.label}</span>
               <span className="text-xs text-[var(--color-text-tertiary)] ml-auto">{link.name}</span>
             </button>
