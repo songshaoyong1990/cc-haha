@@ -588,7 +588,7 @@ export const zh: Record<TranslationKey, string> = {
   'settings.mcp.form.back': '返回服务列表',
   'settings.mcp.form.createTitle': '连接自定义 MCP',
   'settings.mcp.form.createHint': '按当前 Claude Code 支持的字段添加一个自定义 MCP 服务。',
-  'settings.mcp.form.editTitle': '更新 {name} MCP',
+  'settings.mcp.form.editTitle': '配置 {name} MCP',
   'settings.mcp.form.editHint': '查看连接信息、保存修改，或直接在桌面端重连这个服务。',
   'settings.mcp.form.transportLocked': '如果你想切换 MCP 服务类型，请先卸载后重新添加。',
   'settings.mcp.form.uninstall': '卸载',

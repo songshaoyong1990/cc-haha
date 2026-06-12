@@ -586,7 +586,7 @@ export const en = {
   'settings.mcp.form.back': 'Back to servers',
   'settings.mcp.form.createTitle': 'Connect to a custom MCP',
   'settings.mcp.form.createHint': 'Set up a custom MCP server with the fields supported by Claude Code today.',
-  'settings.mcp.form.editTitle': 'Update {name} MCP',
+  'settings.mcp.form.editTitle': 'Configure {name} MCP',
   'settings.mcp.form.editHint': 'Review connection details, save changes, or reconnect this server from the desktop app.',
   'settings.mcp.form.transportLocked': 'If you would like to switch MCP server type, uninstall first.',
   'settings.mcp.form.uninstall': 'Uninstall',

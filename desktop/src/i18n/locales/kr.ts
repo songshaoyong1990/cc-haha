@@ -588,7 +588,7 @@ export const kr: Record<TranslationKey, string> = {
   'settings.mcp.form.back': '서버 목록으로 돌아가기',
   'settings.mcp.form.createTitle': '사용자 지정 MCP에 연결',
   'settings.mcp.form.createHint': '현재 Claude Code가 지원하는 필드로 사용자 지정 MCP 서버를 설정합니다.',
-  'settings.mcp.form.editTitle': '{name} MCP 업데이트',
+  'settings.mcp.form.editTitle': '{name} MCP 설정',
   'settings.mcp.form.editHint': '연결 세부 정보를 확인하고 변경 사항을 저장하거나 데스크톱 앱에서 이 서버를 다시 연결합니다.',
   'settings.mcp.form.transportLocked': 'MCP 서버 유형을 전환하려면 먼저 제거하세요.',
   'settings.mcp.form.uninstall': '제거',

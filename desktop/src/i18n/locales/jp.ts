@@ -588,7 +588,7 @@ export const jp: Record<TranslationKey, string> = {
   'settings.mcp.form.back': 'サーバー一覧に戻る',
   'settings.mcp.form.createTitle': 'カスタム MCP に接続',
   'settings.mcp.form.createHint': '現在 Claude Code がサポートするフィールドでカスタム MCP サーバーをセットアップします。',
-  'settings.mcp.form.editTitle': '{name} MCP を更新',
+  'settings.mcp.form.editTitle': '{name} MCP を設定',
   'settings.mcp.form.editHint': '接続の詳細を確認し、変更を保存するか、このサーバーをデスクトップアプリから再接続します。',
   'settings.mcp.form.transportLocked': 'MCP サーバーの種類を切り替えるには、まずアンインストールしてください。',
   'settings.mcp.form.uninstall': 'アンインストール',
