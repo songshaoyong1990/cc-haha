@@ -240,4 +240,65 @@ describe('traceViewModel', () => {
       focusSpanId: 'event:event-failed',
     })
   })
+
+  it('surfaces aborted calls as model errors instead of pending', () => {
+    const viewModel = buildTraceViewModel({
+      sessionId: 'session-aborted',
+      session: null,
+      summary: {
+        apiCalls: 1,
+        failedCalls: 1,
+        totalDurationMs: 240_000,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        models: [{ model: 'gpt-5.5', calls: 1 }],
+        updatedAt: '2026-06-09T10:04:01.000Z',
+      },
+      calls: [{
+        id: 'call-aborted',
+        sessionId: 'session-aborted',
+        source: 'anthropic',
+        model: 'gpt-5.5',
+        status: 'error',
+        startedAt: '2026-06-09T10:00:01.000Z',
+        completedAt: '2026-06-09T10:04:01.000Z',
+        durationMs: 240_000,
+        metadata: { phase: 'api_call_aborted', aborted: true },
+        request: {
+          method: 'POST',
+          url: 'https://sub2api.example/v1/messages',
+          headers: {},
+          body: { contentType: 'json', bytes: 20, sha256: 'a', preview: '{"model":"gpt-5.5"}', truncated: false },
+        },
+        response: {
+          status: 200,
+          headers: {},
+          body: { contentType: 'text', bytes: 30, sha256: 'b', preview: 'data: {"type":"message_start"}', truncated: true },
+        },
+        error: {
+          name: 'AbortError',
+          message: 'Stream idle timeout: no chunks received for 240s',
+        },
+      }],
+      events: [{
+        id: 'event-aborted',
+        sessionId: 'session-aborted',
+        callId: 'call-aborted',
+        timestamp: '2026-06-09T10:04:01.000Z',
+        phase: 'api_call_aborted',
+        severity: 'error',
+        message: 'Stream idle timeout: no chunks received for 240s',
+      }],
+    }, [])
+
+    const llmSpan = viewModel.spansById.get('llm:call-aborted')
+    expect(llmSpan).toMatchObject({ kind: 'llm', status: 'error', durationMs: 240_000 })
+    expect(llmSpan?.completedAt).toBe('2026-06-09T10:04:01.000Z')
+    expect(viewModel.diagnosis).toMatchObject({
+      status: 'blocked',
+      reason: 'model_error',
+      focusSpanId: 'llm:call-aborted',
+      pendingModelCalls: 0,
+    })
+  })
 })

@@ -312,6 +312,49 @@ describe('TraceSession', () => {
     expect(detail.getByText('1.2k → 847')).toBeInTheDocument()
   })
 
+  it('shows the aborted badge and abort guidance for an aborted call', async () => {
+    const abortedCall = makeCall({
+      id: 'call-aborted',
+      status: 'error',
+      completedAt: '2026-06-09T10:04:01.000Z',
+      durationMs: 240_000,
+      metadata: { phase: 'api_call_aborted', aborted: true },
+      error: { name: 'AbortError', message: 'Stream idle timeout: no chunks received for 240s' },
+      response: {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+        body: {
+          contentType: 'text',
+          bytes: 30,
+          sha256: 'c'.repeat(64),
+          preview: 'data: {"type":"message_start"}',
+          truncated: true,
+        },
+      },
+    })
+    vi.mocked(sessionsApi.getTrace).mockResolvedValue({
+      ...baseTrace,
+      summary: { ...baseTrace.summary, failedCalls: 1 },
+      calls: [abortedCall],
+    })
+    vi.mocked(sessionsApi.getTraceCall).mockResolvedValue({ call: abortedCall })
+    await renderReady()
+
+    fireEvent.click(within(screen.getByTestId('trace-tree')).getByText('claude-sonnet-4-5'))
+
+    const detail = within(screen.getByTestId('trace-detail'))
+    expect(await detail.findByTestId('trace-call-error')).toBeInTheDocument()
+    expect(detail.getByTestId('trace-call-aborted-badge')).toHaveTextContent('Aborted')
+    expect(detail.getByText('AbortError')).toBeInTheDocument()
+    expect(detail.getByText('Stream idle timeout: no chunks received for 240s')).toBeInTheDocument()
+    expect(
+      detail.getByText('The request was aborted before the response completed (timeout or cancellation).'),
+    ).toBeInTheDocument()
+    // The header pill shows the terminal error state, not pending.
+    expect(detail.getByText('error')).toBeInTheDocument()
+    expect(detail.queryByText('pending')).not.toBeInTheDocument()
+  })
+
   it('falls back to Raw with a legacy notice when the body cannot be parsed', async () => {
     const legacyCall = makeCall({
       request: {
