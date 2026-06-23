@@ -5,7 +5,7 @@
  * 确保 Desktop App 与 CLI 的数据完全互通。
  */
 
-import { createReadStream } from 'node:fs'
+import { createReadStream, type Stats } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import * as path from 'node:path'
 import * as os from 'node:os'
@@ -286,6 +286,12 @@ type SessionListSummary = {
   worktreeSession?: PersistedWorktreeSession | null
 }
 
+type SessionListSummaryCacheEntry = {
+  mtimeMs: number
+  size: number
+  summary: SessionListSummary
+}
+
 const VALID_SESSION_PERMISSION_MODES = new Set([
   'default',
   'acceptEdits',
@@ -318,6 +324,7 @@ export class SessionService {
     expiresAt: number
     result: { sessions: SessionListItem[]; total: number }
   }>()
+  private readonly sessionListSummaryCache = new Map<string, SessionListSummaryCacheEntry>()
 
   private sessionListCacheKey(options?: {
     project?: string
@@ -340,6 +347,35 @@ export class SessionService {
 
   private invalidateSessionListCache(): void {
     this.sessionListCache.clear()
+  }
+
+  private cloneSessionListSummary(summary: SessionListSummary): SessionListSummary {
+    return {
+      ...summary,
+      repository: summary.repository ? { ...summary.repository } : undefined,
+      worktreeSession: summary.worktreeSession
+        ? { ...summary.worktreeSession }
+        : summary.worktreeSession,
+    }
+  }
+
+  private async getCachedSessionListSummary(
+    filePath: string,
+    projectDir: string,
+    stat: Stats,
+  ): Promise<SessionListSummary> {
+    const cached = this.sessionListSummaryCache.get(filePath)
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      return this.cloneSessionListSummary(cached.summary)
+    }
+
+    const summary = await this.scanSessionListSummary(filePath, projectDir, stat)
+    this.sessionListSummaryCache.set(filePath, {
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+      summary: this.cloneSessionListSummary(summary),
+    })
+    return summary
   }
 
   // --------------------------------------------------------------------------
@@ -1746,7 +1782,7 @@ export class SessionService {
     const items: SessionListItem[] = []
     for (const { filePath, projectDir, sessionId, stat } of paginatedFiles) {
       try {
-        const summary = await this.scanSessionListSummary(filePath, projectDir, stat)
+        const summary = await this.getCachedSessionListSummary(filePath, projectDir, stat)
         const workDir = summary.workDir
         const projectRoot = await this.resolveProjectRootFromSessionMetadata({
           worktreeSession: summary.worktreeSession,
