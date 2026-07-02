@@ -2448,6 +2448,13 @@ describe('chatStore history mapping', () => {
       type: 'set_permission_mode',
       mode: 'acceptEdits',
     })
+    expect(updateSessionPermissionModeMock).not.toHaveBeenCalled()
+
+    useChatStore.getState().handleServerMessage('session-1', {
+      type: 'permission_mode_changed',
+      mode: 'acceptEdits',
+    })
+
     expect(updateSessionPermissionModeMock).toHaveBeenCalledWith('session-1', 'acceptEdits')
   })
 

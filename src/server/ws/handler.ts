@@ -654,7 +654,6 @@ async function handleSetPermissionMode(
   const pendingStartup = sessionStartupPromises.get(sessionId)
 
   if (pendingStartup) {
-    await persistSessionPermissionMode(sessionId, message.mode)
     await enqueueRuntimeTransition(sessionId, async () => {
       await pendingStartup.catch(() => undefined)
       if (!conversationService.hasSession(sessionId)) return
@@ -664,7 +663,9 @@ async function handleSetPermissionMode(
   }
 
   if (!conversationService.hasSession(sessionId)) {
-    await persistSessionPermissionMode(sessionId, message.mode)
+    if (await persistSessionPermissionMode(sessionId, message.mode)) {
+      sendMessage(ws, { type: 'permission_mode_changed', mode: message.mode })
+    }
     return
   }
 
@@ -700,11 +701,13 @@ async function applyPermissionModeToActiveSession(
   const currentMode = conversationService.getSessionPermissionMode(sessionId)
   if (shouldDeferRuntimeRestartForActiveTurn(sessionId)) {
     deferredPermissionModes.set(sessionId, mode)
-    await persistSessionPermissionMode(sessionId, mode)
     return
   }
 
-  if (currentMode === mode) return
+  if (currentMode === mode) {
+    sendMessage(ws, { type: 'permission_mode_changed', mode })
+    return
+  }
   const needsRestart = shouldRestartForPermissionMode(currentMode, mode)
 
   if (needsRestart) {
@@ -720,6 +723,7 @@ async function applyPermissionModeToActiveSession(
     return
   }
   await persistSessionPermissionMode(sessionId, mode)
+  sendMessage(ws, { type: 'permission_mode_changed', mode })
 }
 
 async function handleSetRuntimeConfig(
@@ -828,6 +832,7 @@ async function restartSessionWithPermissionMode(
       `?token=${encodeURIComponent(crypto.randomUUID())}`
     await conversationService.startSession(sessionId, workDir, sdkUrl, runtimeSettings)
 
+    sendMessage(ws, { type: 'permission_mode_changed', mode })
     sendMessage(ws, { type: 'status', state: 'idle' })
     console.log(`[WS] Restarted CLI for ${sessionId} with permission mode: ${mode}`)
   } catch (err) {
@@ -856,18 +861,19 @@ async function persistSessionPermissionMode(
   sessionId: string,
   mode: string,
   knownWorkDir?: string | null,
-): Promise<void> {
+): Promise<boolean> {
   const workDir =
     knownWorkDir ||
     conversationService.getSessionWorkDir(sessionId) ||
     await sessionService.getSessionWorkDir(sessionId).catch(() => null)
 
-  if (!workDir) return
+  if (!workDir) return false
 
   await sessionService.appendSessionMetadata(sessionId, {
     workDir,
     permissionMode: mode,
   })
+  return true
 }
 
 async function persistSessionRuntimeConfig(
@@ -2441,6 +2447,7 @@ function bindClientSessionOutput(
       return
     }
 
+    handleCliPermissionModeBroadcast(sessionId, cliMsg)
     const serverMsgs = translateCliMessage(cliMsg, sessionId)
     for (const msg of serverMsgs) {
       sendMessage(ws, msg)
@@ -2450,6 +2457,30 @@ function bindClientSessionOutput(
 
   clientOutputCallbacks.set(ws, { sessionId, callback })
   conversationService.onOutput(sessionId, callback)
+}
+
+function getCliPermissionModeBroadcast(cliMsg: any): string | null {
+  if (
+    cliMsg?.type === 'system' &&
+    cliMsg.subtype === 'status' &&
+    typeof cliMsg.permissionMode === 'string'
+  ) {
+    return cliMsg.permissionMode
+  }
+  return null
+}
+
+function handleCliPermissionModeBroadcast(sessionId: string, cliMsg: any): void {
+  const mode = getCliPermissionModeBroadcast(cliMsg)
+  if (!mode) return
+
+  const currentMode = conversationService.getSessionPermissionMode(sessionId)
+  if (currentMode === mode) return
+
+  if (!conversationService.recordSessionPermissionMode(sessionId, mode)) return
+  void persistSessionPermissionMode(sessionId, mode).catch((err) => {
+    console.warn(`[WS] Failed to persist CLI permission mode broadcast for ${sessionId}:`, err)
+  })
 }
 
 type RuntimeSettings = {

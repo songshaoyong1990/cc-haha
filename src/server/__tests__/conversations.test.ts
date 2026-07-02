@@ -3279,6 +3279,8 @@ describe('WebSocket Chat Integration', () => {
       const ws = new WebSocket(`${wsUrl}/ws/${sessionId}`)
       let switchTriggered = false
       let turnComplete = false
+      let modeConfirmedBeforeTurnComplete = false
+      let deferredInspectionChecked = false
       try {
         await new Promise<void>((resolve, reject) => {
           const timeout = setTimeout(() => {
@@ -3286,7 +3288,7 @@ describe('WebSocket Chat Integration', () => {
             reject(new Error(`Timed out waiting for active-turn permission switch for session ${sessionId}`))
           }, 10_000)
 
-          ws.onmessage = (event) => {
+          ws.onmessage = async (event) => {
             const msg = JSON.parse(event.data as string)
 
             if (msg.type === 'connected') {
@@ -3312,7 +3314,27 @@ describe('WebSocket Chat Integration', () => {
                 type: 'set_permission_mode',
                 mode: 'bypassPermissions',
               }))
+              await new Promise((resolve) => setTimeout(resolve, 25))
+              const inspectionRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/inspection?includeContext=0`)
+              if (!inspectionRes.ok) {
+                clearTimeout(timeout)
+                ws.close()
+                reject(new Error(`Inspection failed while permission switch was deferred: ${inspectionRes.status}`))
+                return
+              }
+              const inspectionBody = await inspectionRes.json() as { status?: { permissionMode?: string } }
+              deferredInspectionChecked = true
+              if (inspectionBody.status?.permissionMode !== 'default') {
+                clearTimeout(timeout)
+                ws.close()
+                reject(new Error(`Deferred permission switch was exposed before restart: ${inspectionBody.status?.permissionMode}`))
+                return
+              }
               return
+            }
+
+            if (msg.type === 'permission_mode_changed' && !turnComplete) {
+              modeConfirmedBeforeTurnComplete = true
             }
 
             if (
@@ -3349,6 +3371,8 @@ describe('WebSocket Chat Integration', () => {
 
         expect(switchTriggered).toBe(true)
         expect(turnComplete).toBe(true)
+        expect(deferredInspectionChecked).toBe(true)
+        expect(modeConfirmedBeforeTurnComplete).toBe(false)
         expect(startCalls).toHaveLength(2)
         expect(startCalls[0]).toMatchObject({
           sessionId,
@@ -3467,6 +3491,11 @@ describe('WebSocket Chat Integration', () => {
           .filter((msg) => msg.type === 'status')
           .map((msg) => msg.state),
       ).toEqual(['idle'])
+      expect(
+        messages
+          .slice(switchStartIndex)
+          .some((msg) => msg.type === 'permission_mode_changed' && msg.mode === 'bypassPermissions'),
+      ).toBe(true)
       expect(messages.slice(switchStartIndex).some((msg) => msg.type === 'error')).toBe(false)
     } finally {
       ws.close()
@@ -3512,6 +3541,7 @@ describe('WebSocket Chat Integration', () => {
     }) as typeof conversationService.startSession
 
     const ws = new WebSocket(`${wsUrl}/ws/${sessionId}`)
+    const messages: any[] = []
     try {
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
@@ -3519,6 +3549,7 @@ describe('WebSocket Chat Integration', () => {
         }, 5000)
         ws.onmessage = (event) => {
           const msg = JSON.parse(event.data as string)
+          messages.push(msg)
           if (msg.type === 'connected') {
             clearTimeout(timeout)
             ws.send(JSON.stringify({
@@ -3544,6 +3575,10 @@ describe('WebSocket Chat Integration', () => {
         const body = await res.json() as { status?: { permissionMode?: string } }
         return body.status?.permissionMode === 'acceptEdits'
       }, `persisted inactive permission switch for ${sessionId}`)
+      expect(messages.some((msg) =>
+        msg.type === 'permission_mode_changed' &&
+        msg.mode === 'acceptEdits'
+      )).toBe(true)
 
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
@@ -3662,6 +3697,72 @@ describe('WebSocket Chat Integration', () => {
     } finally {
       ws.close()
       conversationService.startSession = originalStartSession
+      conversationService.stopSession(sessionId)
+    }
+  }, 20_000)
+
+  it('should persist CLI-originated permission-mode broadcasts', async () => {
+    const createRes = await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workDir: process.cwd(), permissionMode: 'default' }),
+    })
+    expect(createRes.status).toBe(201)
+    const { sessionId } = await createRes.json() as { sessionId: string }
+
+    const ws = new WebSocket(`${wsUrl}/ws/${sessionId}`)
+    const messages: any[] = []
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error(`Timed out waiting for CLI permission broadcast turn for session ${sessionId}`))
+        }, 10_000)
+        ws.onmessage = (event) => {
+          const msg = JSON.parse(event.data as string)
+          messages.push(msg)
+          if (msg.type === 'connected') {
+            ws.send(JSON.stringify({ type: 'user_message', content: 'turn before CLI permission broadcast' }))
+            return
+          }
+          if (msg.type === 'message_complete') {
+            clearTimeout(timeout)
+            resolve()
+          }
+          if (msg.type === 'error') {
+            clearTimeout(timeout)
+            reject(new Error(msg.message))
+          }
+        }
+        ws.onerror = () => {
+          clearTimeout(timeout)
+          reject(new Error(`WebSocket error for CLI permission broadcast session ${sessionId}`))
+        }
+      })
+      expect(conversationService.hasSession(sessionId)).toBe(true)
+
+      conversationService.handleSdkPayload(sessionId, `${JSON.stringify({
+        type: 'system',
+        subtype: 'status',
+        status: null,
+        permissionMode: 'acceptEdits',
+      })}\n`)
+
+      await waitUntil(
+        () => messages.some((msg) =>
+          msg.type === 'permission_mode_changed' &&
+          msg.mode === 'acceptEdits'
+        ),
+        `forwarded CLI permission broadcast for ${sessionId}`,
+      )
+      expect(conversationService.getSessionPermissionMode(sessionId)).toBe('acceptEdits')
+      await waitUntil(async () => {
+        const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/inspection?includeContext=0`)
+        if (!res.ok) return false
+        const body = await res.json() as { status?: { permissionMode?: string } }
+        return body.status?.permissionMode === 'acceptEdits'
+      }, `persisted CLI permission broadcast for ${sessionId}`)
+    } finally {
+      ws.close()
       conversationService.stopSession(sessionId)
     }
   }, 20_000)
