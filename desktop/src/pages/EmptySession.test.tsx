@@ -131,6 +131,7 @@ vi.mock('../components/controls/ModelSelector', async () => {
 import { EmptySession } from './EmptySession'
 import { ApiError } from '../api/client'
 import { useChatStore } from '../stores/chatStore'
+import { useProviderStore } from '../stores/providerStore'
 import { useSessionRuntimeStore } from '../stores/sessionRuntimeStore'
 import { useSessionStore } from '../stores/sessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -186,6 +187,7 @@ describe('EmptySession', () => {
   const initialRuntimeState = useSessionRuntimeStore.getInitialState()
   const initialUiState = useUIStore.getInitialState()
   const initialPluginState = usePluginStore.getInitialState()
+  const initialProviderState = useProviderStore.getInitialState()
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -199,6 +201,7 @@ describe('EmptySession', () => {
     useSessionRuntimeStore.setState(initialRuntimeState, true)
     useUIStore.setState(initialUiState, true)
     usePluginStore.setState(initialPluginState, true)
+    useProviderStore.setState(initialProviderState, true)
 
     mocks.createSession.mockResolvedValue({ sessionId: 'draft-session' })
     mocks.getRepositoryContext.mockResolvedValue(okRepositoryContext())
@@ -238,6 +241,7 @@ describe('EmptySession', () => {
     useSessionRuntimeStore.setState(initialRuntimeState, true)
     useUIStore.setState(initialUiState, true)
     usePluginStore.setState(initialPluginState, true)
+    useProviderStore.setState(initialProviderState, true)
   })
 
   it('uses compact composer controls on phone-sized H5 browsers', async () => {
@@ -524,6 +528,66 @@ describe('EmptySession', () => {
         },
       ],
       ['draft-session', { type: 'prewarm_session' }],
+    ])
+  })
+
+  it('materializes the active provider runtime before the first draft message', async () => {
+    useProviderStore.setState({
+      providers: [{
+        id: 'provider-minimax',
+        presetId: 'minimax',
+        name: 'MiniMax',
+        apiKey: 'sk-minimax',
+        baseUrl: 'https://api.minimaxi.com/anthropic',
+        apiFormat: 'anthropic',
+        runtimeKind: 'anthropic_compatible',
+        models: {
+          main: 'MiniMax-M3[1m]',
+          haiku: 'MiniMax-M3[1m]',
+          sonnet: 'MiniMax-M3[1m]',
+          opus: 'MiniMax-M3[1m]',
+        },
+        toolSearchEnabled: true,
+      }],
+      activeId: 'provider-minimax',
+      providerOrder: ['provider-minimax', 'claude-official', 'openai-official'],
+      hasLoadedProviders: true,
+    })
+
+    render(<EmptySession />)
+
+    fireEvent.change(screen.getByRole('textbox'), {
+      target: { value: 'draft question', selectionStart: 14 },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+
+    await waitFor(() => {
+      expect(mocks.createSession).toHaveBeenCalledWith({ permissionMode: 'default' })
+    })
+
+    expect(useSessionRuntimeStore.getState().selections['draft-session']).toEqual({
+      providerId: 'provider-minimax',
+      modelId: 'MiniMax-M3[1m]',
+    })
+    expect(mocks.wsSend.mock.calls.slice(0, 3)).toEqual([
+      [
+        'draft-session',
+        {
+          type: 'set_runtime_config',
+          providerId: 'provider-minimax',
+          modelId: 'MiniMax-M3[1m]',
+        },
+      ],
+      ['draft-session', { type: 'prewarm_session' }],
+      [
+        'draft-session',
+        {
+          type: 'user_message',
+          content: 'draft question',
+          attachments: [],
+        },
+      ],
     ])
   })
 

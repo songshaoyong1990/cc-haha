@@ -2192,6 +2192,111 @@ describe('WebSocket Chat Integration', () => {
     }
   }, 20_000)
 
+  it('does not strand the first MiniMax provider turn when prewarm and user message flush together (#844)', async () => {
+    const providerService = new ProviderService()
+    const provider = await providerService.addProvider({
+      presetId: 'minimax',
+      name: 'MiniMax first-turn race',
+      apiKey: 'key-minimax-first-turn-race',
+      baseUrl: 'https://api.minimaxi.com/anthropic',
+      apiFormat: 'anthropic',
+      models: {
+        main: 'MiniMax-M3',
+        haiku: 'MiniMax-M3',
+        sonnet: 'MiniMax-M3',
+        opus: 'MiniMax-M3',
+      },
+      model1mSupport: {
+        main: true,
+        haiku: true,
+        sonnet: true,
+        opus: true,
+      },
+    })
+    await providerService.activateProvider(provider.id)
+
+    const createRes = await fetch(`${baseUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workDir: process.cwd() }),
+    })
+    expect(createRes.status).toBe(201)
+    const { sessionId } = await createRes.json() as { sessionId: string }
+
+    const originalStartSession = conversationService.startSession.bind(conversationService)
+    const startCalls: Array<{
+      sessionId: string
+      options: { providerId?: string | null } | undefined
+    }> = []
+
+    conversationService.startSession = (async function patchedStartSession(
+      sid: string,
+      workDir: string,
+      sdkUrl: string,
+      options?: { permissionMode?: string; model?: string; effort?: string; thinking?: 'enabled' | 'adaptive' | 'disabled'; providerId?: string | null },
+    ) {
+      startCalls.push({ sessionId: sid, options })
+      return originalStartSession(sid, workDir, sdkUrl, options)
+    }) as typeof conversationService.startSession
+
+    const messages: any[] = []
+    const ws = new WebSocket(`${wsUrl}/ws/${sessionId}`)
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          ws.close()
+          reject(new Error(`Timed out waiting for first MiniMax provider turn for session ${sessionId}`))
+        }, 10_000)
+
+        ws.onmessage = (event) => {
+          const msg = JSON.parse(event.data as string)
+          messages.push(msg)
+
+          if (msg.type === 'connected') {
+            ws.send(JSON.stringify({ type: 'prewarm_session' }))
+            ws.send(JSON.stringify({ type: 'user_message', content: 'first turn without provider test' }))
+            return
+          }
+
+          if (msg.type === 'error') {
+            clearTimeout(timeout)
+            ws.close()
+            reject(new Error(msg.message))
+            return
+          }
+
+          if (msg.type === 'message_complete') {
+            clearTimeout(timeout)
+            ws.close()
+            resolve()
+          }
+        }
+
+        ws.onerror = () => {
+          clearTimeout(timeout)
+          ws.close()
+          reject(new Error(`WebSocket error for first MiniMax provider turn ${sessionId}`))
+        }
+      })
+
+      expect(startCalls).toHaveLength(1)
+      expect(startCalls[0]).toMatchObject({
+        sessionId,
+        options: {
+          providerId: provider.id,
+        },
+      })
+      expect(messages.some((msg) => msg.type === 'content_delta')).toBe(true)
+      expect(messages.some((msg) => msg.type === 'message_complete')).toBe(true)
+      expect(messages.some((msg) => msg.type === 'error')).toBe(false)
+    } finally {
+      ws.close()
+      conversationService.startSession = originalStartSession
+      conversationService.stopSession(sessionId)
+    }
+  }, 20_000)
+
   it('should pass the active provider id into default desktop sessions', async () => {
     const providerService = new ProviderService()
     const provider = await providerService.addProvider({
