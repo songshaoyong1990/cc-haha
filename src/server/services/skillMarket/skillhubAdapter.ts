@@ -58,7 +58,6 @@ const SKILLHUB_DETAIL_INSTALLABLE_TRUST_STATES = new Set<SkillMarketTrustState>(
 ])
 const SKILLHUB_BLOCKED_REPORT_STATUSES = new Set(['malicious', 'blocked'])
 const SKILLHUB_WARNING_REPORT_STATUSES = new Set(['warning', 'suspicious'])
-const SKILLHUB_BENIGN_REPORT_STATUSES = new Set(['benign', 'clean'])
 
 function requiresApiKey(labels?: { requires_api_key?: string }) {
   return labels?.requires_api_key === 'true'
@@ -96,8 +95,6 @@ function trustFromReports(reports?: Record<string, { status?: string; statusText
   const values = Object.values(reports ?? {})
   const summaryForStatuses = (statuses: Set<string>) =>
     values.find((report) => report.status && statuses.has(report.status) && report.statusText)?.statusText
-  const summaryExcludingStatuses = (statuses: Set<string>) =>
-    values.find((report) => (!report.status || !statuses.has(report.status)) && report.statusText)?.statusText
 
   if (values.some((report) => report.status && SKILLHUB_BLOCKED_REPORT_STATUSES.has(report.status))) {
     return {
@@ -114,7 +111,7 @@ function trustFromReports(reports?: Record<string, { status?: string; statusText
   if (values.length > 0 && values.every((report) => report.status === 'benign')) {
     return { trustState: 'benign', trustSummary: values.find((report) => report.statusText)?.statusText }
   }
-  return { trustState: 'unknown', trustSummary: summaryExcludingStatuses(SKILLHUB_BENIGN_REPORT_STATUSES) }
+  return { trustState: 'unknown' }
 }
 
 function installEligibilityFromTrustState(trustState: SkillMarketTrustState): SkillMarketDetail['installEligibility'] {

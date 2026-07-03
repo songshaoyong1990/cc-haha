@@ -57,32 +57,39 @@ export function normalizeClawHubScan(payload: ClawHubScanResponse): {
   packageSha256?: string
 } {
   const scannerEntries = Object.values(payload.scanners ?? {})
+  const blockedStatuses = ['malicious', 'blocked']
+  const warningStatuses = ['suspicious', 'warning']
   const scannerSummary = scannerEntries.find((entry) => entry.summary)?.summary
   const scannerSummaryForStatuses = (statuses: string[]) =>
     scannerEntries.find((entry) => entry.summary && entry.status && statuses.includes(entry.status))?.summary
-  const scannerSummaryExcludingStatuses = (statuses: string[]) =>
-    scannerEntries.find((entry) => entry.summary && (!entry.status || !statuses.includes(entry.status)))?.summary
+  const hasScannerStatus = (statuses: string[]) =>
+    scannerEntries.some((entry) => entry.status && statuses.includes(entry.status))
 
-  if (payload.status === 'clean' && !payload.hasWarnings) {
-    return { trustState: 'clean', trustSummary: scannerSummary, packageSha256: payload.sha256 }
-  }
-  if (payload.status === 'malicious' || payload.status === 'blocked') {
+  if (payload.status === 'malicious' || payload.status === 'blocked' || hasScannerStatus(blockedStatuses)) {
     return {
       trustState: 'blocked',
-      trustSummary: scannerSummaryForStatuses(['malicious', 'blocked']),
+      trustSummary: scannerSummaryForStatuses(blockedStatuses),
       packageSha256: payload.sha256,
     }
   }
-  if (payload.status === 'suspicious' || payload.hasWarnings) {
+  if (
+    payload.status === 'suspicious'
+    || payload.status === 'warning'
+    || payload.hasWarnings
+    || hasScannerStatus(warningStatuses)
+  ) {
     return {
       trustState: 'warning',
-      trustSummary: scannerSummaryForStatuses(['suspicious', 'warning']),
+      trustSummary: scannerSummaryForStatuses(warningStatuses),
       packageSha256: payload.sha256,
     }
+  }
+  if (payload.status === 'clean') {
+    return { trustState: 'clean', trustSummary: scannerSummary, packageSha256: payload.sha256 }
   }
   return {
     trustState: 'unknown',
-    trustSummary: scannerSummaryExcludingStatuses(['benign', 'clean']),
+    trustSummary: undefined,
     packageSha256: payload.sha256,
   }
 }

@@ -70,6 +70,19 @@ describe('skill market source normalization', () => {
     })
   })
 
+  it('prioritizes malicious ClawHub scanner results over clean top-level status', () => {
+    expect(normalizeClawHubScan({
+      status: 'clean',
+      scanners: {
+        metadata: { status: 'clean', summary: 'No dangerous patterns detected.' },
+        staticAnalysis: { status: 'malicious', summary: 'Credential exfiltration detected.' },
+      },
+    })).toMatchObject({
+      trustState: 'blocked',
+      trustSummary: 'Credential exfiltration detected.',
+    })
+  })
+
   it('does not use clean ClawHub scanner summaries for blocked scans', () => {
     expect(normalizeClawHubScan({
       status: 'malicious',
@@ -96,11 +109,49 @@ describe('skill market source normalization', () => {
     })
   })
 
+  it('prioritizes warning ClawHub scanner results over clean top-level status', () => {
+    expect(normalizeClawHubScan({
+      status: 'clean',
+      scanners: {
+        metadata: { status: 'clean', summary: 'No dangerous patterns detected.' },
+        staticAnalysis: { status: 'warning', summary: 'Reads shell profile files.' },
+      },
+    })).toMatchObject({
+      trustState: 'warning',
+      trustSummary: 'Reads shell profile files.',
+    })
+  })
+
+  it('maps ClawHub top-level warning status to warning trust state', () => {
+    expect(normalizeClawHubScan({
+      status: 'warning',
+      scanners: {
+        staticAnalysis: { status: 'warning', summary: 'Reads shell profile files.' },
+      },
+    })).toMatchObject({
+      trustState: 'warning',
+      trustSummary: 'Reads shell profile files.',
+    })
+  })
+
   it('does not use clean ClawHub scanner summaries for unknown scans', () => {
     expect(normalizeClawHubScan({
       status: 'unknown',
       scanners: {
         metadata: { status: 'clean', summary: 'No dangerous patterns detected.' },
+      },
+    })).toEqual({
+      trustState: 'unknown',
+      trustSummary: undefined,
+      packageSha256: undefined,
+    })
+  })
+
+  it('does not use unscored ClawHub scanner summaries for unknown scans', () => {
+    expect(normalizeClawHubScan({
+      status: 'unknown',
+      scanners: {
+        metadata: { summary: 'No dangerous patterns detected.' },
       },
     })).toEqual({
       trustState: 'unknown',
@@ -294,7 +345,25 @@ describe('skill market source normalization', () => {
     })
 
     expect(detail.trustState).toBe('unknown')
-    expect(detail.trustSummary).toBe('Scanner still reviewing.')
+    expect(detail.trustSummary).toBeUndefined()
+    expect(detail.installEligibility.status).toBe('blocked')
+    expect(detail.installEligibility.reason).toMatch(/security report is missing or inconclusive/i)
+  })
+
+  it('does not use unscored SkillHub report summaries for unknown details', () => {
+    const detail = normalizeSkillHubDetail({
+      securityReports: {
+        community: { status: 'benign', statusText: 'safe' },
+        staticAnalysis: { statusText: 'No issues detected.' },
+      },
+      skill: {
+        slug: 'unscored-report-skill',
+        displayName: 'Unscored Report Skill',
+      },
+    })
+
+    expect(detail.trustState).toBe('unknown')
+    expect(detail.trustSummary).toBeUndefined()
     expect(detail.installEligibility.status).toBe('blocked')
     expect(detail.installEligibility.reason).toMatch(/security report is missing or inconclusive/i)
   })
