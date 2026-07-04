@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { skillMarketApi } from '../api/skillMarket'
@@ -183,6 +183,93 @@ describe('SkillCenter', () => {
     await waitFor(() => {
       expect(mockedSkillMarketApi.install).toHaveBeenCalledWith('clawhub', 'ppt-generator', '1.0.0')
     })
+  })
+
+  it('renders marketplace cards with trust, preview, install, API key, and popularity signals', async () => {
+    mockedSkillMarketApi.list.mockResolvedValue({
+      items: [
+        makeItem({
+          slug: 'skill-vetter',
+          displayName: 'Skill Vetter',
+          summary: 'Security-first skill vetting.',
+          downloads: 260960,
+          trustState: 'clean',
+          installed: false,
+        }),
+        makeItem({
+          slug: 'weather',
+          displayName: 'Weather',
+          summary: 'Fetch current weather through a command-line workflow.',
+          downloads: 18420,
+          trustState: 'clean',
+          installed: true,
+          requiresApiKey: false,
+        }),
+        makeItem({
+          slug: 'crm-sync',
+          displayName: 'CRM Sync',
+          summary: 'Connects to an external CRM API.',
+          downloads: 7420,
+          trustState: 'warning',
+          requiresApiKey: true,
+        }),
+      ],
+      nextCursor: null,
+      source: 'clawhub',
+      sourceStatus: 'ok',
+    })
+
+    render(<SkillCenter />)
+
+    const market = screen.getByTestId('skill-marketplace-tab')
+    const vetterCard = await within(market).findByRole('button', { name: 'Skill Vetter' })
+    const weatherCard = within(market).getByRole('button', { name: 'Weather' })
+    const crmCard = within(market).getByRole('button', { name: 'CRM Sync' })
+    expect(vetterCard).toBeInTheDocument()
+    expect(within(market).getAllByText('Clean').length).toBeGreaterThan(0)
+    expect(within(market).getAllByText('Preview').length).toBeGreaterThan(0)
+    expect(within(weatherCard).getByText('Installed')).toBeInTheDocument()
+    expect(within(crmCard).getByText('API key')).toBeInTheDocument()
+    expect(within(vetterCard).getByText(/260\.9K|260,960/)).toBeInTheDocument()
+  })
+
+  it('uses marketplace-shaped loading skeletons while the catalog loads', () => {
+    mockedSkillMarketApi.list.mockReturnValue(new Promise(() => {}))
+    act(() => {
+      useSkillMarketStore.setState({
+        isLoading: true,
+        items: [],
+      })
+    })
+
+    render(<SkillCenter />)
+
+    expect(screen.getByTestId('skill-marketplace-loading')).toBeInTheDocument()
+    expect(screen.getAllByTestId('skill-card-skeleton')).toHaveLength(8)
+  })
+
+  it('places install decision, blocking reason, and file preview in the drawer decision area', async () => {
+    mockedSkillMarketApi.detail.mockResolvedValue({
+      detail: makeDetail({
+        installEligibility: { status: 'blocked', reason: 'A full package safety scan is required before install.' },
+        trustSummary: 'Scanner found no known malicious content, but the package scan is incomplete.',
+        filePreviews: [{
+          path: 'SKILL.md',
+          content: '# Skill Vetter\n\nSecurity-first skill vetting.',
+          language: 'markdown',
+          size: 512,
+        }],
+      }),
+    })
+
+    render(<SkillCenter />)
+    fireEvent.click(await screen.findByRole('button', { name: 'PPT Generator' }))
+
+    const dialog = await screen.findByRole('dialog', { name: 'PPT Generator' })
+    expect(within(dialog).getByRole('button', { name: 'Blocked' })).toBeDisabled()
+    expect(within(dialog).getByText(/full package safety scan/i)).toBeInTheDocument()
+    expect(within(dialog).getByText('File preview')).toBeInTheDocument()
+    expect(within(dialog).getByText('SKILL.md')).toBeInTheDocument()
   })
 
   it('renders raw Markdown and Python previews for an uninstalled marketplace skill', async () => {

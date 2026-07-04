@@ -105,10 +105,6 @@ export function SkillCenter() {
     () => items.filter((item) => TRUST_SAFE.includes(item.trustState)).length,
     [items],
   )
-  const totalDownloads = useMemo(
-    () => items.reduce((sum, item) => sum + (item.downloads ?? item.installs ?? 0), 0),
-    [items],
-  )
   const filteredItems = useMemo(
     () => items.filter((item) => matchesMarketFilter(item, marketFilter)),
     [items, marketFilter],
@@ -279,7 +275,6 @@ export function SkillCenter() {
               total={items.length}
               safeCount={safeCount}
               installedCount={installedCount}
-              totalDownloads={totalDownloads}
               loading={isLoading}
             />
 
@@ -298,7 +293,7 @@ export function SkillCenter() {
             <div className="min-h-0">
               <div className="min-w-0">
                 {isLoading ? (
-                  <LoadingState label={t('skillCenter.marketplace.loading')} />
+                  <MarketplaceSkeletonGrid />
                 ) : items.length === 0 ? (
                   <EmptyState
                     icon={<Search size={22} aria-hidden="true" />}
@@ -395,7 +390,6 @@ function MarketplaceStatusLine({
   total,
   safeCount,
   installedCount,
-  totalDownloads,
   loading,
 }: {
   t: TFunction
@@ -406,7 +400,6 @@ function MarketplaceStatusLine({
   total: number
   safeCount: number
   installedCount: number
-  totalDownloads: number
   loading: boolean
 }) {
   const sourceName = resolvedSource
@@ -423,10 +416,9 @@ function MarketplaceStatusLine({
         {sourceName}
         <span className="text-[var(--color-text-tertiary)]">{statusLabel}</span>
       </span>
-      <StatusDot label={t('skillCenter.marketplace.loadedCount', { count: String(total) })} />
-      <StatusDot label={`${t('skillCenter.marketplace.safe')} ${safeCount}/${total}`} />
-      <StatusDot label={`${t('skillCenter.marketplace.downloads')} ${compactNumber(totalDownloads)}`} />
-      <StatusDot label={t('skillCenter.marketplace.installedHint', { count: String(installedCount) })} />
+      <StatusDot label={t('skillCenter.marketplace.status.loaded', { count: String(total) })} />
+      <StatusDot label={t('skillCenter.marketplace.status.safe', { safe: String(safeCount), total: String(total) })} />
+      <StatusDot label={t('skillCenter.marketplace.status.installed', { count: String(installedCount) })} />
       {loading ? (
         <span className="inline-flex items-center gap-1 text-[var(--color-text-secondary)]">
           <span className="h-3 w-3 animate-spin rounded-full border-2 border-[var(--color-brand)] border-t-transparent" />
@@ -448,6 +440,31 @@ function StatusDot({ label }: { label: string }) {
   return (
     <span className="inline-flex items-center gap-1.5">
       <span className="h-1 w-1 rounded-full bg-[var(--color-border-strong)]" aria-hidden="true" />
+      {label}
+    </span>
+  )
+}
+
+function StateBadge({
+  tone,
+  icon,
+  label,
+}: {
+  tone: 'neutral' | 'info' | 'success' | 'warning'
+  icon: ReactNode
+  label: string
+}) {
+  const className = tone === 'success'
+    ? 'bg-[var(--color-success-container)] text-[var(--color-success)]'
+    : tone === 'warning'
+      ? 'bg-[var(--color-warning-container)] text-[var(--color-warning)]'
+      : tone === 'info'
+        ? 'bg-[var(--color-info-container)] text-[var(--color-info)]'
+        : 'border border-[var(--color-border)] bg-[var(--color-surface-container-low)] text-[var(--color-text-secondary)]'
+
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs ${className}`}>
+      {icon}
       {label}
     </span>
   )
@@ -565,6 +582,7 @@ function SkillMarketCard({
   const stats = formatStats(item, t)
   const sourceLabel = t(`skillCenter.marketplace.source.${item.source}`)
   const summary = item.summaryZh || item.summary
+  const hasPreview = Boolean(item.trustSummary || item.summary || item.summaryZh)
 
   return (
     <button
@@ -572,7 +590,7 @@ function SkillMarketCard({
       aria-label={item.displayName}
       onClick={onSelect}
       className={[
-        'group flex min-h-[120px] flex-col rounded-lg border bg-[var(--color-surface)] p-3 text-left transition-colors',
+        'group flex min-h-[124px] flex-col rounded-lg border bg-[var(--color-surface)] p-3 text-left transition-[border-color,background-color,box-shadow,transform] duration-200 ease-out active:translate-y-px',
         'hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-hover)] hover:shadow-sm',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
         active ? 'border-[var(--color-border-focus)] bg-[var(--color-surface-selected)] shadow-sm' : 'border-[var(--color-border)]',
@@ -608,19 +626,34 @@ function SkillMarketCard({
         {summary}
       </p>
 
-      <div className="mt-2 flex flex-wrap gap-1.5">
+      <div className="mt-2 flex min-h-7 flex-wrap gap-1.5">
         <TrustBadge state={item.trustState} />
         {item.installed ? (
-          <span className="inline-flex items-center gap-1 rounded-md bg-[var(--color-info-container)] px-2 py-1 text-xs text-[var(--color-info)]">
-            <Check size={12} aria-hidden="true" />
-            {t('skillCenter.marketplace.installedBadge')}
-          </span>
+          <StateBadge
+            tone="info"
+            icon={<Check size={12} aria-hidden="true" />}
+            label={t('skillCenter.marketplace.installedBadge')}
+          />
         ) : null}
+        {hasPreview ? (
+          <StateBadge
+            tone="neutral"
+            icon={<FileText size={12} aria-hidden="true" />}
+            label={t('skillCenter.marketplace.previewAvailable')}
+          />
+        ) : (
+          <StateBadge
+            tone="neutral"
+            icon={<FileText size={12} aria-hidden="true" />}
+            label={t('skillCenter.marketplace.noPreviewBadge')}
+          />
+        )}
         {item.requiresApiKey ? (
-          <span className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-2 py-1 text-xs text-[var(--color-text-secondary)]">
-            <Lock size={12} aria-hidden="true" />
-            {t('skillCenter.marketplace.requiresApiKey')}
-          </span>
+          <StateBadge
+            tone="neutral"
+            icon={<Lock size={12} aria-hidden="true" />}
+            label={t('skillCenter.marketplace.requiresApiKey')}
+          />
         ) : null}
       </div>
 
@@ -667,7 +700,7 @@ function SkillMarketDetailPanel({
           aria-label={t('skillCenter.marketplace.selectionTitle')}
           className="absolute right-0 top-0 flex h-full w-[min(520px,calc(100vw-24px))] flex-col border-l border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-dropdown)]"
         >
-          <LoadingState label={t('skillCenter.marketplace.detailLoading')} />
+          <DetailDrawerSkeleton />
         </aside>
       </div>,
       document.body,
@@ -781,85 +814,97 @@ function SkillMarketDetailPanel({
                 ? t('skillCenter.marketplace.viewInstalled')
                 : installLabel(t, eligibility)}
           </button>
-          <div className="mt-3 flex flex-wrap gap-3 text-xs">
-            <a
-              href={detail.canonicalUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 text-[var(--color-brand)] hover:underline"
-            >
-              {t('skillCenter.marketplace.openSource')}
-              <ExternalLink size={12} aria-hidden="true" />
-            </a>
-            {detail.upstreamUrl ? (
+          {eligibility.status === 'blocked' || eligibility.status === 'conflict' ? (
+            <div className="mt-3 rounded-md border border-[var(--color-warning)]/30 bg-[var(--color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--color-warning)]">
+              {eligibilityMessage(t, eligibility)}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
+          <DrawerSection title={t('skillCenter.marketplace.drawer.summary')}>
+            <p className="text-sm leading-6 text-[var(--color-text-secondary)]">
+              {summary}
+            </p>
+          </DrawerSection>
+
+          <DrawerSection title={t('skillCenter.marketplace.drawer.safety')}>
+            <div className="space-y-3">
+              {detail.trustSummary ? (
+                <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2 text-xs leading-5 text-[var(--color-text-secondary)]">
+                  {detail.trustSummary}
+                </div>
+              ) : null}
+
+              {detail.riskLabels.length > 0 ? (
+                <div>
+                  <div className="mb-2 text-xs font-medium text-[var(--color-text-secondary)]">
+                    {t('skillCenter.marketplace.riskLabels')}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {detail.riskLabels.map((label) => (
+                      <span
+                        key={label}
+                        className="rounded-md bg-[var(--color-warning-container)] px-2 py-1 text-xs text-[var(--color-warning)]"
+                      >
+                        {t(`skillCenter.marketplace.risk.${label}`)}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 rounded-md bg-[var(--color-success-container)] px-3 py-2 text-xs text-[var(--color-success)]">
+                  <ShieldCheck size={14} aria-hidden="true" />
+                  {t('skillCenter.marketplace.noRiskLabels')}
+                </div>
+              )}
+
+              {detail.requiresApiKey ? (
+                <div className="flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">
+                  <Lock size={14} aria-hidden="true" />
+                  {t('skillCenter.marketplace.requiresApiKey')}
+                </div>
+              ) : null}
+            </div>
+          </DrawerSection>
+
+          <DrawerSection title={t('skillCenter.marketplace.filePreview')}>
+            <FilePreviewSection detail={detail} />
+          </DrawerSection>
+
+          <DrawerSection title={t('skillCenter.marketplace.drawer.metadata')}>
+            <dl className="grid grid-cols-2 gap-2 text-xs">
+              <MetaItem icon={<FileText size={13} aria-hidden="true" />} label={t('skillCenter.marketplace.files')} value={String(detail.files.length)} />
+              <MetaItem icon={<Download size={13} aria-hidden="true" />} label={t('skillCenter.marketplace.downloads')} value={formatNumber(detail.downloads)} />
+              <MetaItem icon={<Star size={13} aria-hidden="true" />} label={t('skillCenter.marketplace.stars')} value={formatNumber(detail.stars)} />
+              <MetaItem icon={<Clock3 size={13} aria-hidden="true" />} label={t('skillCenter.marketplace.license')} value={detail.license || '-'} />
+            </dl>
+          </DrawerSection>
+
+          <DrawerSection title={t('skillCenter.marketplace.drawer.links')}>
+            <div className="flex flex-wrap gap-3 text-xs">
               <a
-                href={detail.upstreamUrl}
+                href={detail.canonicalUrl}
                 target="_blank"
                 rel="noreferrer"
                 className="inline-flex items-center gap-1 text-[var(--color-brand)] hover:underline"
               >
-                {t('skillCenter.marketplace.openUpstream')}
+                {t('skillCenter.marketplace.openSource')}
                 <ExternalLink size={12} aria-hidden="true" />
               </a>
-            ) : null}
-          </div>
-        </div>
-
-        <div className="min-h-0 flex-1 overflow-y-auto p-5">
-          <p className="text-sm leading-6 text-[var(--color-text-secondary)]">
-            {summary}
-          </p>
-
-          {detail.trustSummary ? (
-            <div className="mt-4 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2 text-xs leading-5 text-[var(--color-text-secondary)]">
-              {detail.trustSummary}
+              {detail.upstreamUrl ? (
+                <a
+                  href={detail.upstreamUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-[var(--color-brand)] hover:underline"
+                >
+                  {t('skillCenter.marketplace.openUpstream')}
+                  <ExternalLink size={12} aria-hidden="true" />
+                </a>
+              ) : null}
             </div>
-          ) : null}
-
-          {eligibility.status === 'blocked' || eligibility.status === 'conflict' ? (
-            <div className="mt-4 rounded-md border border-[var(--color-warning)]/30 bg-[var(--color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--color-warning)]">
-              {eligibilityMessage(t, eligibility)}
-            </div>
-          ) : null}
-
-          <dl className="mt-4 grid grid-cols-2 gap-2 text-xs">
-            <MetaItem icon={<FileText size={13} aria-hidden="true" />} label={t('skillCenter.marketplace.files')} value={String(detail.files.length)} />
-            <MetaItem icon={<Download size={13} aria-hidden="true" />} label={t('skillCenter.marketplace.downloads')} value={formatNumber(detail.downloads)} />
-            <MetaItem icon={<Star size={13} aria-hidden="true" />} label={t('skillCenter.marketplace.stars')} value={formatNumber(detail.stars)} />
-            <MetaItem icon={<Clock3 size={13} aria-hidden="true" />} label={t('skillCenter.marketplace.license')} value={detail.license || '-'} />
-          </dl>
-
-          {detail.riskLabels.length > 0 ? (
-            <div className="mt-4">
-              <div className="mb-2 text-xs font-medium text-[var(--color-text-secondary)]">
-                {t('skillCenter.marketplace.riskLabels')}
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {detail.riskLabels.map((label) => (
-                  <span
-                    key={label}
-                    className="rounded-md bg-[var(--color-warning-container)] px-2 py-1 text-xs text-[var(--color-warning)]"
-                  >
-                    {t(`skillCenter.marketplace.risk.${label}`)}
-                  </span>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="mt-4 flex items-center gap-2 rounded-md bg-[var(--color-success-container)] px-3 py-2 text-xs text-[var(--color-success)]">
-              <ShieldCheck size={14} aria-hidden="true" />
-              {t('skillCenter.marketplace.noRiskLabels')}
-            </div>
-          )}
-
-          {detail.requiresApiKey ? (
-            <div className="mt-4 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">
-              <Lock size={14} aria-hidden="true" />
-              {t('skillCenter.marketplace.requiresApiKey')}
-            </div>
-          ) : null}
-
-          <FilePreviewSection detail={detail} />
+          </DrawerSection>
         </div>
       </aside>
     </div>,
@@ -884,7 +929,7 @@ function FilePreviewSection({ detail }: { detail: SkillMarketDetail }) {
       return null
     }
     return (
-      <div className="mt-4 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2">
+      <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2">
         <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-secondary)]">
           <FileText size={13} aria-hidden="true" />
           {t('skillCenter.marketplace.previewUnavailable')}
@@ -897,11 +942,7 @@ function FilePreviewSection({ detail }: { detail: SkillMarketDetail }) {
   }
 
   return (
-    <div className="mt-4">
-      <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-[var(--color-text-secondary)]">
-        <FileText size={13} aria-hidden="true" />
-        {t('skillCenter.marketplace.filePreview')}
-      </div>
+    <div>
       <div className="space-y-3">
         {previews.map((preview) => (
           <section
@@ -935,6 +976,17 @@ function FilePreviewSection({ detail }: { detail: SkillMarketDetail }) {
         ))}
       </div>
     </div>
+  )
+}
+
+function DrawerSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="border-t border-[var(--color-border)] pt-4 first:border-t-0 first:pt-0">
+      <h4 className="mb-2 text-xs font-semibold uppercase tracking-normal text-[var(--color-text-tertiary)]">
+        {title}
+      </h4>
+      {children}
+    </section>
   )
 }
 
@@ -1048,11 +1100,50 @@ function EligibilityBadge({ eligibility }: { eligibility: SkillMarketInstallElig
   )
 }
 
-function LoadingState({ label }: { label: string }) {
+function MarketplaceSkeletonGrid() {
+  const t = useTranslation()
+
   return (
-    <div className="flex min-h-[260px] items-center justify-center rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-6 py-8 text-sm text-[var(--color-text-secondary)]">
-      <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-[var(--color-brand)] border-t-transparent" />
-      {label}
+    <div
+      data-testid="skill-marketplace-loading"
+      aria-label={t('skillCenter.marketplace.loadingCard')}
+      className="grid gap-2.5 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5"
+    >
+      {Array.from({ length: 8 }).map((_, index) => (
+        <div
+          key={index}
+          data-testid="skill-card-skeleton"
+          className="min-h-[124px] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-3"
+        >
+          <div className="h-4 w-2/3 animate-pulse rounded bg-[var(--color-surface-container-high)]" />
+          <div className="mt-3 h-3 w-full animate-pulse rounded bg-[var(--color-surface-container-high)]" />
+          <div className="mt-2 h-3 w-5/6 animate-pulse rounded bg-[var(--color-surface-container-high)]" />
+          <div className="mt-4 flex gap-2">
+            <div className="h-5 w-16 animate-pulse rounded bg-[var(--color-surface-container-high)]" />
+            <div className="h-5 w-20 animate-pulse rounded bg-[var(--color-surface-container-high)]" />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function DetailDrawerSkeleton() {
+  return (
+    <div className="flex h-full flex-col">
+      <div className="border-b border-[var(--color-border)] px-5 py-4">
+        <div className="h-5 w-28 animate-pulse rounded bg-[var(--color-surface-container-high)]" />
+        <div className="mt-3 h-6 w-2/3 animate-pulse rounded bg-[var(--color-surface-container-high)]" />
+      </div>
+      <div className="border-b border-[var(--color-border)] p-5">
+        <div className="h-10 w-full animate-pulse rounded bg-[var(--color-surface-container-high)]" />
+        <div className="mt-3 h-4 w-3/4 animate-pulse rounded bg-[var(--color-surface-container-high)]" />
+      </div>
+      <div className="space-y-3 p-5">
+        <div className="h-4 w-full animate-pulse rounded bg-[var(--color-surface-container-high)]" />
+        <div className="h-4 w-5/6 animate-pulse rounded bg-[var(--color-surface-container-high)]" />
+        <div className="h-40 w-full animate-pulse rounded bg-[var(--color-surface-container-high)]" />
+      </div>
     </div>
   )
 }
@@ -1126,13 +1217,13 @@ function matchesMarketFilter(item: SkillMarketItem, filter: MarketFilter) {
 
 function formatStats(item: SkillMarketItem, t: TFunction): string {
   if (typeof item.downloads === 'number') {
-    return `${compactNumber(item.downloads)} ${t('skillCenter.marketplace.downloads')}`
+    return t('skillCenter.marketplace.cardMeta.downloads', { count: formatNumber(item.downloads) })
   }
   if (typeof item.installs === 'number') {
     return `${compactNumber(item.installs)} ${t('skillCenter.marketplace.sort.installs')}`
   }
   if (typeof item.stars === 'number') {
-    return `${compactNumber(item.stars)} ${t('skillCenter.marketplace.stars')}`
+    return t('skillCenter.marketplace.cardMeta.stars', { count: formatNumber(item.stars) })
   }
   return ''
 }
