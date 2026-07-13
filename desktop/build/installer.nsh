@@ -6,6 +6,10 @@ Var pid
 
 !ifndef BUILD_UNINSTALLER
 Var ccHahaRecoveryDone
+Var ccHahaPerUserInstallLocation
+Var ccHahaPerMachineInstallLocation
+Var ccHahaPerUserUninstallString
+Var ccHahaPerMachineUninstallString
 
 Function CcHahaUninstallerParent
   Exch $R0
@@ -155,31 +159,52 @@ FunctionEnd
 
 !macro CcHahaRunLegacyRecovery
   ${If} $ccHahaRecoveryDone != "1"
-    StrCpy $8 "trusted-user"
-    ${If} ${UAC_IsAdmin}
-    ${AndIfNot} ${UAC_IsInnerInstance}
-      StrCpy $8 "untrusted-elevated"
-    ${EndIf}
-
-    ${If} ${UAC_IsInnerInstance}
-      StrCpy $8 "trusted-uac-outer"
-      !insertmacro UAC_AsUser_Call Function CcHahaRecoverLegacy ${UAC_SYNCREGISTERS}|${UAC_SYNCOUTDIR}|${UAC_SYNCINSTDIR}
-    ${Else}
-      Call CcHahaRecoverLegacy
-    ${EndIf}
-
-    ${If} $0 != "0"
-      DetailPrint "Legacy data recovery stopped the installer (helper exit code: $0; output: $1)"
-      ${If} $1 == ""
-        StrCpy $1 "Recovery helper failed without diagnostic output (exit code $0)"
+    ReadRegStr $ccHahaPerUserInstallLocation HKCU "${INSTALL_REGISTRY_KEY}" InstallLocation
+    ReadRegStr $ccHahaPerMachineInstallLocation HKLM "${INSTALL_REGISTRY_KEY}" InstallLocation
+    ReadRegStr $ccHahaPerUserUninstallString HKCU "${UNINSTALL_REGISTRY_KEY}" UninstallString
+    ReadRegStr $ccHahaPerMachineUninstallString HKLM "${UNINSTALL_REGISTRY_KEY}" UninstallString
+    !ifdef UNINSTALL_REGISTRY_KEY_2
+      ${If} $ccHahaPerUserUninstallString == ""
+        ReadRegStr $ccHahaPerUserUninstallString HKCU "${UNINSTALL_REGISTRY_KEY_2}" UninstallString
       ${EndIf}
-      StrCpy $R2 "$1" 360
-      MessageBox MB_ICONSTOP|MB_OK "Claude Code Haha stopped setup before removing the old version. Reason: $R2$\r$\n$\r$\nClose the app and retry. If the reason mentions an elevated installer, launch setup normally instead of using Run as administrator.$\r$\n$\r$\nClaude Code Haha 已在删除旧版本前停止安装。原因：$R2$\r$\n$\r$\n请关闭旧程序后重试；如果原因提到安装器权限过高，请直接双击运行，不要使用“以管理员身份运行”。旧版本和原数据尚未删除。"
-      SetErrorLevel 20
-      Quit
+      ${If} $ccHahaPerMachineUninstallString == ""
+        ReadRegStr $ccHahaPerMachineUninstallString HKLM "${UNINSTALL_REGISTRY_KEY_2}" UninstallString
+      ${EndIf}
+    !endif
+
+    ${If} $ccHahaPerUserInstallLocation == ""
+    ${AndIf} $ccHahaPerMachineInstallLocation == ""
+    ${AndIf} $ccHahaPerUserUninstallString == ""
+    ${AndIf} $ccHahaPerMachineUninstallString == ""
+      StrCpy $ccHahaRecoveryDone "1"
+      DetailPrint "No registered installation needs legacy data recovery"
+    ${Else}
+      StrCpy $8 "trusted-user"
+      ${If} ${UAC_IsAdmin}
+      ${AndIfNot} ${UAC_IsInnerInstance}
+        StrCpy $8 "untrusted-elevated"
+      ${EndIf}
+
+      ${If} ${UAC_IsInnerInstance}
+        StrCpy $8 "trusted-uac-outer"
+        !insertmacro UAC_AsUser_Call Function CcHahaRecoverLegacy ${UAC_SYNCREGISTERS}|${UAC_SYNCOUTDIR}|${UAC_SYNCINSTDIR}
+      ${Else}
+        Call CcHahaRecoverLegacy
+      ${EndIf}
+
+      ${If} $0 != "0"
+        DetailPrint "Legacy data recovery stopped the installer (helper exit code: $0; output: $1)"
+        ${If} $1 == ""
+          StrCpy $1 "Recovery helper failed without diagnostic output (exit code $0)"
+        ${EndIf}
+        StrCpy $R2 "$1" 360
+        MessageBox MB_ICONSTOP|MB_OK "Claude Code Haha stopped setup before removing the old version. Reason: $R2$\r$\n$\r$\nClose the app and retry. If the reason mentions an elevated installer, launch setup normally instead of using Run as administrator.$\r$\n$\r$\nClaude Code Haha 已在删除旧版本前停止安装。原因：$R2$\r$\n$\r$\n请关闭旧程序后重试；如果原因提到安装器权限过高，请直接双击运行，不要使用“以管理员身份运行”。旧版本和原数据尚未删除。"
+        SetErrorLevel 20
+        Quit
+      ${EndIf}
+      StrCpy $ccHahaRecoveryDone "1"
+      DetailPrint "Legacy Claude Code Haha data safety check completed"
     ${EndIf}
-    StrCpy $ccHahaRecoveryDone "1"
-    DetailPrint "Legacy Claude Code Haha data safety check completed"
   ${EndIf}
 !macroend
 !endif
