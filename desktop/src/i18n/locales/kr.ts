@@ -1739,6 +1739,8 @@ export const kr: Record<TranslationKey, string> = {
   'dirPicker.chooseProjectFolder': '프로젝트 폴더 선택',
   'dirPicker.useThisFolder': '이 폴더 사용',
   'dirPicker.noSubdirs': '하위 디렉터리가 없습니다',
+  'dirPicker.browseError': '이 폴더를 열 수 없습니다. 접근 권한을 확인하고 다시 시도하세요.',
+  'dirPicker.parentFolder': '상위 폴더',
 
   // ─── File Search ──────────────────────────────────────
   'fileSearch.searching': '검색 중...',

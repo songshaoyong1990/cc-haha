@@ -1737,6 +1737,8 @@ export const en = {
   'dirPicker.chooseProjectFolder': 'Choose project folder',
   'dirPicker.useThisFolder': 'Use this folder',
   'dirPicker.noSubdirs': 'No subdirectories',
+  'dirPicker.browseError': 'Could not open this folder. Check its permissions and retry.',
+  'dirPicker.parentFolder': 'Parent folder',
 
   // ─── File Search ──────────────────────────────────────
   'fileSearch.searching': 'Searching...',

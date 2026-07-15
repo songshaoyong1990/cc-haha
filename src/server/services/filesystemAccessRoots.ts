@@ -44,6 +44,19 @@ export function isWithinRegisteredFilesystemRoot(targetPath: string): boolean {
   return false
 }
 
+/**
+ * Folder selection may browse one level above a registered project so users can
+ * switch to a sibling project. This is intentionally separate from file access:
+ * serving files remains limited to the registered project itself.
+ */
+export function isWithinRegisteredFilesystemBrowseRoot(targetPath: string): boolean {
+  for (const rootPath of registeredRoots) {
+    const parentPath = path.dirname(rootPath)
+    if (isWithinRoot(targetPath, parentPath)) return true
+  }
+  return false
+}
+
 export function clearFilesystemAccessRootsForTests(): void {
   registeredRoots.clear()
 }

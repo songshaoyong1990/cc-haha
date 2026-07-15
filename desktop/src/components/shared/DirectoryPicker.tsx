@@ -34,7 +34,40 @@ function projectNameFromPath(filePath: string) {
   const displayRoot = filePath.includes(DESKTOP_WORKTREE_MARKER)
     ? filePath.slice(0, filePath.indexOf(DESKTOP_WORKTREE_MARKER))
     : filePath
-  return displayRoot.split('/').filter(Boolean).pop() || filePath
+  return displayRoot.split(/[\\/]/).filter(Boolean).pop() || filePath
+}
+
+type Breadcrumb = { label: string; path: string }
+
+export function directoryBreadcrumbs(filePath: string): Breadcrumb[] {
+  if (!filePath) return []
+
+  const normalized = filePath.replace(/\\/g, '/')
+  const driveMatch = normalized.match(/^([a-zA-Z]:)(?:\/|$)/)
+  const isWindowsPath = Boolean(driveMatch)
+  const separator = isWindowsPath ? '\\' : '/'
+  const breadcrumbs: Breadcrumb[] = []
+  let currentPath = ''
+  let remainder = normalized
+
+  if (driveMatch) {
+    currentPath = `${driveMatch[1]}\\`
+    breadcrumbs.push({ label: currentPath, path: currentPath })
+    remainder = normalized.slice(driveMatch[0].length)
+  } else if (normalized.startsWith('/')) {
+    currentPath = '/'
+    breadcrumbs.push({ label: '/', path: '/' })
+    remainder = normalized.slice(1)
+  }
+
+  for (const segment of remainder.split('/').filter(Boolean)) {
+    currentPath = currentPath
+      ? `${currentPath.replace(/[\\/]$/, '')}${separator}${segment}`
+      : segment
+    breadcrumbs.push({ label: segment, path: currentPath })
+  }
+
+  return breadcrumbs
 }
 
 export function DirectoryPicker({ value, onChange, variant = 'chip', isGitProject = false }: Props) {
@@ -45,6 +78,7 @@ export function DirectoryPicker({ value, onChange, variant = 'chip', isGitProjec
   const [browseEntries, setBrowseEntries] = useState<DirEntry[]>([])
   const [browsePath, setBrowsePath] = useState('')
   const [browseParent, setBrowseParent] = useState('')
+  const [browseErrorPath, setBrowseErrorPath] = useState('')
   const [loading, setLoading] = useState(false)
   const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number; direction: 'up' | 'down' } | null>(null)
   const ref = useRef<HTMLDivElement>(null)
@@ -116,13 +150,17 @@ export function DirectoryPicker({ value, onChange, variant = 'chip', isGitProjec
 
   const loadBrowseDir = async (path?: string) => {
     setLoading(true)
+    setBrowseErrorPath('')
     try {
       const result = await filesystemApi.browse(path)
       setBrowsePath(result.currentPath)
       setBrowseParent(result.parentPath)
       setBrowseEntries(result.entries)
-    } catch { /* API not available */ }
-    setLoading(false)
+    } catch {
+      setBrowseErrorPath(path || '')
+    } finally {
+      setLoading(false)
+    }
   }
 
   const handleSelect = (path: string) => {
@@ -135,7 +173,7 @@ export function DirectoryPicker({ value, onChange, variant = 'chip', isGitProjec
 
   const handleChooseFolder = async () => {
     const host = getDesktopHost()
-    if (host.isDesktop && host.capabilities.dialogs) {
+    if (host.capabilities.dialogs) {
       // Desktop: native OS folder dialog
       setIsOpen(false)
       try {
@@ -143,8 +181,9 @@ export function DirectoryPicker({ value, onChange, variant = 'chip', isGitProjec
           directory: true,
           multiple: false,
           title: t('dirPicker.chooseProjectFolder'),
+          defaultPath: value || undefined,
         })
-        if (typeof selected === 'string' && selected.length > 0) onChange(selected)
+        if (typeof selected === 'string' && selected.length > 0) handleSelect(selected)
       } catch (err) {
         console.error('[DirectoryPicker] Failed to open folder dialog:', err)
       }
@@ -178,6 +217,7 @@ export function DirectoryPicker({ value, onChange, variant = 'chip', isGitProjec
     zIndex: 9999,
   }
   const dropdownTitle = mode === 'recent' ? t('dirPicker.recent') : t('dirPicker.chooseProjectFolder')
+  const breadcrumbs = directoryBreadcrumbs(browsePath)
   const dropdownContent = mode === 'recent' ? (
     <>
       {!isMobileBrowser && (
@@ -245,14 +285,15 @@ export function DirectoryPicker({ value, onChange, variant = 'chip', isGitProjec
         <button onClick={() => setMode('recent')} className="mr-2 text-xs text-[var(--color-text-accent)] hover:underline">
           {'← ' + t('dirPicker.recent')}
         </button>
-        <button onClick={() => loadBrowseDir('/')} className="text-[10px] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]">/</button>
-        {browsePath.split('/').filter(Boolean).map((seg, i, arr) => (
-          <span key={i} className="flex items-center gap-1">
-            <span className="text-[10px] text-[var(--color-text-tertiary)]">/</span>
+        {breadcrumbs.map((crumb, index) => (
+          <span key={crumb.path} className="flex min-w-0 items-center gap-1">
+            {index > 0 && <span className="text-[10px] text-[var(--color-text-tertiary)]">/</span>}
             <button
-              onClick={() => loadBrowseDir('/' + arr.slice(0, i + 1).join('/'))}
-              className="text-[10px] text-[var(--color-text-accent)] hover:underline"
-            >{seg}</button>
+              type="button"
+              onClick={() => loadBrowseDir(crumb.path)}
+              title={crumb.path}
+              className="max-w-[120px] truncate text-[10px] text-[var(--color-text-accent)] hover:underline"
+            >{crumb.label}</button>
           </span>
         ))}
       </div>
@@ -260,10 +301,26 @@ export function DirectoryPicker({ value, onChange, variant = 'chip', isGitProjec
       <div className={`${isMobileBrowser ? '' : 'max-h-[240px]'} overflow-y-auto`}>
         {loading ? (
           <div className="px-3 py-4 text-center text-xs text-[var(--color-text-tertiary)]">{t('common.loading')}</div>
+        ) : browseErrorPath ? (
+          <div className="flex flex-col items-center gap-2 px-3 py-5 text-center">
+            <span className="text-xs text-[var(--color-error)]">{t('dirPicker.browseError')}</span>
+            <button
+              type="button"
+              onClick={() => loadBrowseDir(browseErrorPath)}
+              className="text-xs font-semibold text-[var(--color-text-accent)] hover:underline"
+            >
+              {t('common.retry')}
+            </button>
+          </div>
         ) : (
           <>
             {browseParent && browseParent !== browsePath && (
-              <button onClick={() => loadBrowseDir(browseParent)} className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-[var(--color-surface-hover)]">
+              <button
+                type="button"
+                onClick={() => loadBrowseDir(browseParent)}
+                aria-label={t('dirPicker.parentFolder')}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-[var(--color-surface-hover)]"
+              >
                 <span className="material-symbols-outlined text-[16px] text-[var(--color-text-tertiary)]">arrow_upward</span>
                 <span className="text-xs text-[var(--color-text-secondary)]">..</span>
               </button>
@@ -294,7 +351,7 @@ export function DirectoryPicker({ value, onChange, variant = 'chip', isGitProjec
 
       <div className="flex items-center justify-between border-t border-[var(--color-border)] px-3 py-2">
         <span className="truncate font-[var(--font-mono)] text-[10px] text-[var(--color-text-tertiary)]">{browsePath}</span>
-        <button onClick={() => handleSelect(browsePath)} className="rounded-lg bg-[var(--color-brand)] px-3 py-1.5 text-xs font-semibold text-[var(--color-on-primary)] hover:opacity-90">
+        <button disabled={!browsePath || loading} onClick={() => handleSelect(browsePath)} className="rounded-lg bg-[var(--color-brand)] px-3 py-1.5 text-xs font-semibold text-[var(--color-on-primary)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
           {t('dirPicker.useThisFolder')}
         </button>
       </div>

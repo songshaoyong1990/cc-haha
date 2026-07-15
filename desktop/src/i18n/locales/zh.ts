@@ -1739,6 +1739,8 @@ export const zh: Record<TranslationKey, string> = {
   'dirPicker.chooseProjectFolder': '选择项目文件夹',
   'dirPicker.useThisFolder': '使用此文件夹',
   'dirPicker.noSubdirs': '无子目录',
+  'dirPicker.browseError': '无法打开此文件夹，请检查访问权限后重试。',
+  'dirPicker.parentFolder': '上级目录',
 
   // ─── File Search ──────────────────────────────────────
   'fileSearch.searching': '搜索中...',

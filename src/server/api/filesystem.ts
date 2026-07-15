@@ -12,7 +12,10 @@ import { execFileNoThrowWithCwd } from '../../utils/execFileNoThrow.js'
 import { findGitRoot, gitExe } from '../../utils/git.js'
 import { ripGrep } from '../../utils/ripgrep.js'
 import { getInitialSettings } from '../../utils/settings/settings.js'
-import { isWithinRegisteredFilesystemRoot } from '../services/filesystemAccessRoots.js'
+import {
+  isWithinRegisteredFilesystemBrowseRoot,
+  isWithinRegisteredFilesystemRoot,
+} from '../services/filesystemAccessRoots.js'
 import {
   isSameOrInsidePathForPlatform,
   normalizeDriveRootPathForPlatform,
@@ -131,7 +134,7 @@ async function handleBrowse(url: URL): Promise<Response> {
   const targetPath = url.searchParams.get('path') || os.homedir() || '/'
   const resolvedPath = path.resolve(normalizeDriveRootPathForPlatform(targetPath))
 
-  if (!isAllowedFilesystemPath(resolvedPath)) {
+  if (!isAllowedFilesystemPath(resolvedPath) && !isWithinRegisteredFilesystemBrowseRoot(resolvedPath)) {
     return json({ error: 'Access denied: path outside allowed directory' }, 403)
   }
 

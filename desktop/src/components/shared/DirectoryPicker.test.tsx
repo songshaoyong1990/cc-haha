@@ -14,7 +14,7 @@ vi.mock('../../api/filesystem', () => ({
   },
 }))
 
-import { DirectoryPicker } from './DirectoryPicker'
+import { DirectoryPicker, directoryBreadcrumbs } from './DirectoryPicker'
 import { sessionsApi } from '../../api/sessions'
 import { filesystemApi } from '../../api/filesystem'
 import { browserHost } from '../../lib/desktopHost/browserHost'
@@ -42,6 +42,15 @@ describe('DirectoryPicker', () => {
 
     expect(screen.getByRole('button')).toHaveTextContent('checkout')
     expect(screen.getByRole('button')).not.toHaveTextContent('desktop-feature-rail-12345678')
+  })
+
+  it('builds navigable breadcrumbs for Windows paths', () => {
+    expect(directoryBreadcrumbs('E:\\project\\game\\VampireSurvivorLike')).toEqual([
+      { label: 'E:\\', path: 'E:\\' },
+      { label: 'project', path: 'E:\\project' },
+      { label: 'game', path: 'E:\\project\\game' },
+      { label: 'VampireSurvivorLike', path: 'E:\\project\\game\\VampireSurvivorLike' },
+    ])
   })
 
   it('does not duplicate the branch in the selected project chip', async () => {
@@ -172,6 +181,50 @@ describe('DirectoryPicker', () => {
     errorSpy.mockRestore()
   })
 
+  it('navigates to the Windows parent directory from browse mode', async () => {
+    vi.mocked(sessionsApi.getRecentProjects).mockResolvedValue({ projects: [] })
+    vi.mocked(filesystemApi.browse)
+      .mockResolvedValueOnce({
+        currentPath: 'E:\\project\\game\\current',
+        parentPath: 'E:\\project\\game',
+        entries: [],
+      })
+      .mockResolvedValueOnce({
+        currentPath: 'E:\\project\\game',
+        parentPath: 'E:\\project',
+        entries: [{ name: 'sibling', path: 'E:\\project\\game\\sibling', isDirectory: true }],
+      })
+
+    render(<DirectoryPicker value="E:\\project\\game\\current" onChange={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /current/ }))
+    fireEvent.click(await screen.findByText(/选择其他文件夹|Choose a different folder/))
+    fireEvent.click(await screen.findByRole('button', { name: /上级目录|Parent folder/ }))
+
+    expect(await screen.findByRole('button', { name: /sibling/ })).toBeInTheDocument()
+    expect(filesystemApi.browse).toHaveBeenNthCalledWith(2, 'E:\\project\\game')
+  })
+
+  it('shows a retry action when parent browsing is denied', async () => {
+    vi.mocked(sessionsApi.getRecentProjects).mockResolvedValue({ projects: [] })
+    vi.mocked(filesystemApi.browse)
+      .mockResolvedValueOnce({
+        currentPath: 'E:\\project\\game\\current',
+        parentPath: 'E:\\project\\game',
+        entries: [],
+      })
+      .mockRejectedValueOnce(new Error('Access denied'))
+
+    render(<DirectoryPicker value="E:\\project\\game\\current" onChange={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /current/ }))
+    fireEvent.click(await screen.findByText(/选择其他文件夹|Choose a different folder/))
+    fireEvent.click(await screen.findByRole('button', { name: /上级目录|Parent folder/ }))
+
+    expect(await screen.findByText(/无法打开此文件夹|Could not open this folder/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /重试|Retry/ })).toBeInTheDocument()
+  })
+
   it('uses the injected desktop host for native folder selection', async () => {
     vi.mocked(sessionsApi.getRecentProjects).mockResolvedValue({ projects: [] })
     const open = vi.fn().mockResolvedValue('/workspace/native-project')
@@ -190,9 +243,9 @@ describe('DirectoryPicker', () => {
     }
     const onChange = vi.fn()
 
-    render(<DirectoryPicker value="" onChange={onChange} />)
+    render(<DirectoryPicker value="/workspace/current-project" onChange={onChange} />)
 
-    fireEvent.click(screen.getByRole('button', { name: /选择项目|Select a project/ }))
+    fireEvent.click(screen.getByRole('button', { name: /current-project/ }))
     fireEvent.click(await screen.findByText(/选择其他文件夹|Choose a different folder/))
 
     await waitFor(() => expect(onChange).toHaveBeenCalledWith('/workspace/native-project'))
@@ -200,6 +253,7 @@ describe('DirectoryPicker', () => {
       directory: true,
       multiple: false,
       title: expect.any(String),
+      defaultPath: '/workspace/current-project',
     })
     expect(filesystemApi.browse).not.toHaveBeenCalled()
   })

@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import {
   clearFilesystemAccessRootsForTests,
+  isWithinRegisteredFilesystemBrowseRoot,
   isWithinRegisteredFilesystemRoot,
   registerChangedFileAccessRoot,
+  registerFilesystemAccessRoot,
 } from './filesystemAccessRoots.js'
 
 describe('registerChangedFileAccessRoot', () => {
@@ -33,5 +35,20 @@ describe('registerChangedFileAccessRoot', () => {
     registerChangedFileAccessRoot(null, '/work/dir')
     registerChangedFileAccessRoot(undefined, '/work/dir')
     expect(isWithinRegisteredFilesystemRoot('/anything')).toBe(false)
+  })
+})
+
+describe('registered filesystem browse roots', () => {
+  beforeEach(() => clearFilesystemAccessRootsForTests())
+  afterEach(() => clearFilesystemAccessRootsForTests())
+
+  it('allows browsing the direct parent and sibling projects without widening file access', () => {
+    const projectRoot = '/workspace/projects/current'
+    registerFilesystemAccessRoot(projectRoot)
+
+    expect(isWithinRegisteredFilesystemBrowseRoot('/workspace/projects')).toBe(true)
+    expect(isWithinRegisteredFilesystemBrowseRoot('/workspace/projects/sibling')).toBe(true)
+    expect(isWithinRegisteredFilesystemBrowseRoot('/workspace')).toBe(false)
+    expect(isWithinRegisteredFilesystemRoot('/workspace/projects/sibling/file.txt')).toBe(false)
   })
 })
